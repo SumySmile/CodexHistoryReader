@@ -53,9 +53,22 @@ app.get('/api/indexing-status', (_req, res) => {
 // Models list endpoint
 app.get('/api/models', (_req, res) => {
   const db = getDb();
+  const source = typeof _req.query.source === 'string' ? _req.query.source : undefined;
+  const params: string[] = [];
+  let whereClause = 'model IS NOT NULL';
+
+  if (source === 'claude' || source === 'codex') {
+    whereClause += ` AND CASE WHEN id LIKE 'codex-%' THEN 'codex' ELSE 'claude' END = ?`;
+    params.push(source);
+  }
+
   const models = db.prepare(
-    'SELECT model, COUNT(*) as count FROM sessions WHERE model IS NOT NULL GROUP BY model ORDER BY count DESC'
-  ).all() as { model: string; count: number }[];
+    `SELECT model, COUNT(*) as count
+     FROM sessions
+     WHERE ${whereClause}
+     GROUP BY model
+     ORDER BY count DESC`
+  ).all(...params) as { model: string; count: number }[];
   res.json(models);
 });
 

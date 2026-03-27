@@ -1,5 +1,7 @@
 import { formatDistanceToNow, format } from 'date-fns';
 
+export type SessionSource = 'claude' | 'codex';
+
 export function timeAgo(dateStr: string | null): string {
   if (!dateStr) return '';
   try {
@@ -39,4 +41,16 @@ export function projectDisplayName(slug: string): string {
 
 export function sessionTitle(summary: string | null, firstPrompt: string | null, fallback = 'Untitled'): string {
   return summary || truncate(firstPrompt, 80) || fallback;
+}
+
+export function sourceLabel(source: SessionSource): string {
+  return source === 'codex' ? 'Codex' : 'Claude';
+}
+
+export function formatModelName(model: string | null, source?: SessionSource): string {
+  if (!model) return '';
+  if (source === 'claude' || model.startsWith('claude-')) {
+    return model.replace('claude-', '').split('-').slice(0, 2).join('-');
+  }
+  return model;
 }

@@ -3,12 +3,16 @@ import * as api from '../lib/api';
 import type { Session, PaginatedSessions } from '../lib/api';
 
 interface Filters {
+  source?: string;
   project?: string;
   favorite?: string;
   tag?: string;
   search?: string;
   sort?: string;
   order?: string;
+  model?: string;
+  min_tokens?: string;
+  max_tokens?: string;
 }
 
 export function useConversations(filters: Filters = {}) {
@@ -22,12 +26,16 @@ export function useConversations(filters: Filters = {}) {
     setError(null);
     try {
       const params: Record<string, string> = { page: String(page), limit: '50' };
+      if (filters.source) params.source = filters.source;
       if (filters.project) params.project = filters.project;
       if (filters.favorite) params.favorite = filters.favorite;
       if (filters.tag) params.tag = filters.tag;
       if (filters.search) params.search = filters.search;
       if (filters.sort) params.sort = filters.sort;
       if (filters.order) params.order = filters.order;
+      if (filters.model) params.model = filters.model;
+      if (filters.min_tokens) params.min_tokens = filters.min_tokens;
+      if (filters.max_tokens) params.max_tokens = filters.max_tokens;
       const result = await api.getSessions(params);
       setData(result);
     } catch (e: any) {
@@ -35,7 +43,19 @@ export function useConversations(filters: Filters = {}) {
     } finally {
       setLoading(false);
     }
-  }, [page, filters.project, filters.favorite, filters.tag, filters.search, filters.sort, filters.order]);
+  }, [
+    page,
+    filters.source,
+    filters.project,
+    filters.favorite,
+    filters.tag,
+    filters.search,
+    filters.sort,
+    filters.order,
+    filters.model,
+    filters.min_tokens,
+    filters.max_tokens,
+  ]);
 
   useEffect(() => { load(); }, [load]);
 

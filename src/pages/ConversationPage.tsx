@@ -5,9 +5,10 @@ import { MessageList } from '../components/detail/MessageList';
 import { TagManager } from '../components/tags/TagManager';
 import { ArrowLeft, Download, Star, Clock, MessageSquare, Wrench, Pencil, Check, X } from 'lucide-react';
 import { MessageListSkeleton } from '../components/shared/Skeleton';
-import { formatDate, formatTokens, sessionTitle } from '../lib/utils';
+import { formatDate, formatTokens, sessionTitle, formatModelName } from '../lib/utils';
 import { toggleFavorite, exportSession, updateSessionTitle, getLocalCustomTitle } from '../lib/api';
 import { useState, useEffect, useCallback } from 'react';
+import { SourceBadge } from '../components/shared/SourceBadge';
 
 export function ConversationPage() {
   const { id } = useParams<{ id: string }>();
@@ -156,6 +157,7 @@ export function ConversationPage() {
                 <h1 className="text-lg font-medium text-[#2d3d34] truncate">
                   {displayTitle}
                 </h1>
+                <SourceBadge source={session.source} />
                 {(session.custom_title || localCustomTitle) && (
                   <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-[#e8f0eb] text-[#6b8578] shrink-0">
                     <Pencil size={10} />
@@ -179,7 +181,11 @@ export function ConversationPage() {
               <span className="flex items-center gap-1">
                 <MessageSquare size={12} /> {messages.length} messages
               </span>
-              {session.model && <span className="text-[#4da87a] font-medium">{session.model}</span>}
+              {session.model && (
+                <span className={session.source === 'codex' ? 'text-[#b96d1f] font-medium' : 'text-[#4da87a] font-medium'}>
+                  {formatModelName(session.model, session.source)}
+                </span>
+              )}
               {session.total_input_tokens > 0 && (
                 <span>{formatTokens(session.total_input_tokens + session.total_output_tokens)} tokens</span>
               )}

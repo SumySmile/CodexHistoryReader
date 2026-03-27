@@ -47,6 +47,8 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 export interface Session {
   id: string;
+  source: 'claude' | 'codex';
+  source_label: string;
   project_slug: string;
   project_path: string | null;
   summary: string | null;
@@ -66,6 +68,7 @@ export interface Session {
 
 export interface PaginatedSessions {
   sessions: Session[];
+  sourceCounts: { all: number; claude: number; codex: number };
   pagination: { page: number; limit: number; total: number; totalPages: number };
 }
 
@@ -239,7 +242,10 @@ export const getProjects = () => fetchJson<Project[]>('/projects');
 export const getStats = () => fetchJson<StatsData>('/stats');
 
 // Models
-export const getModels = () => fetchJson<{ model: string; count: number }[]>('/models');
+export const getModels = (source?: 'claude' | 'codex') => {
+  const qs = new URLSearchParams(source ? { source } : {}).toString();
+  return fetchJson<{ model: string; count: number }[]>(`/models${qs ? `?${qs}` : ''}`);
+};
 
 // Indexing
 export const getIndexingStatus = () => fetchJson<IndexingStatus>('/indexing-status');

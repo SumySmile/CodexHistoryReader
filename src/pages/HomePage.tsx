@@ -6,6 +6,7 @@ import { ConversationListSkeleton } from '../components/shared/Skeleton';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface Filters {
+  source?: string;
   project?: string;
   favorite?: string;
   tag?: string;
@@ -20,6 +21,16 @@ interface Filters {
 export function HomePage() {
   const [filters, setFilters] = useState<Filters>({});
   const { data, loading, error, page, setPage, toggleFavorite } = useConversations(filters);
+  const scopeLabel = filters.source === 'codex'
+    ? 'Codex'
+    : filters.source === 'claude'
+      ? 'Claude'
+      : 'All';
+  const handleFiltersChange = (nextFilters: Filters) => {
+    setPage(1);
+    setFilters(nextFilters);
+  };
+
   const handleSelectProject = (projectSlug: string) => {
     setPage(1);
     setFilters(prev => ({ ...prev, project: projectSlug }));
@@ -27,7 +38,11 @@ export function HomePage() {
 
   return (
     <div className="h-full flex flex-col">
-      <FilterBar filters={filters} onChange={setFilters} />
+      <FilterBar
+        filters={filters}
+        onChange={handleFiltersChange}
+        sourceCounts={data?.sourceCounts}
+      />
 
       {error && (
         <div className="mx-4 mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
@@ -42,7 +57,7 @@ export function HomePage() {
           <>
             <div className="flex items-center justify-between mb-4">
               <span className="text-sm text-[#9aafa3]">
-                {data.pagination.total} conversations
+                {data.pagination.total} {scopeLabel} conversations
               </span>
             </div>
             <ConversationList

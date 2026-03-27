@@ -2,8 +2,11 @@ import { useState, useEffect } from 'react';
 import { Search, Star } from 'lucide-react';
 import { getProjects, getModels } from '../../lib/api';
 import type { Project } from '../../lib/api';
+import { SourceBadge } from '../shared/SourceBadge';
+import type { SessionSource } from '../../lib/utils';
 
 interface Filters {
+  source?: string;
   project?: string;
   favorite?: string;
   tag?: string;
@@ -18,6 +21,7 @@ interface Filters {
 interface Props {
   filters: Filters;
   onChange: (filters: Filters) => void;
+  sourceCounts?: { all: number; claude: number; codex: number };
 }
 
 const TOKEN_RANGES = [
@@ -36,15 +40,26 @@ function currentTokenRangeKey(filters: Filters) {
   return getTokenRangeKey(filters.min_tokens, filters.max_tokens);
 }
 
-export function FilterBar({ filters, onChange }: Props) {
+export function FilterBar({ filters, onChange, sourceCounts }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [models, setModels] = useState<{ model: string; count: number }[]>([]);
   const [searchInput, setSearchInput] = useState(filters.search || '');
 
   useEffect(() => {
     getProjects().then(setProjects).catch(() => {});
-    getModels().then(setModels).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const source = filters.source === 'claude' || filters.source === 'codex'
+      ? filters.source as SessionSource
+      : undefined;
+    getModels(source).then(nextModels => {
+      setModels(nextModels);
+      if (filters.model && !nextModels.some(m => m.model === filters.model)) {
+        onChange({ ...filters, model: undefined });
+      }
+    }).catch(() => {});
+  }, [filters.source]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -61,9 +76,38 @@ export function FilterBar({ filters, onChange }: Props) {
   const currentRange = TOKEN_RANGES.find(
     r => getTokenRangeKey(r.min, r.max) === currentTokenRangeKey(filters)
   ) || TOKEN_RANGES[0];
+  const sourceOptions: { value?: SessionSource; label: string; count: number }[] = [
+    { label: 'All', count: sourceCounts?.all ?? 0 },
+    { value: 'claude', label: 'Claude', count: sourceCounts?.claude ?? 0 },
+    { value: 'codex', label: 'Codex', count: sourceCounts?.codex ?? 0 },
+  ];
 
   return (
     <div className="flex items-center gap-3 px-4 py-3 bg-white border-b border-[#d0ddd5] flex-wrap">
+      <div className="inline-flex items-center rounded-xl border border-[#d0ddd5] bg-[#f5f8f6] p-1 shadow-sm">
+        {sourceOptions.map(option => {
+          const active = (filters.source || '') === (option.value || '');
+          return (
+            <button
+              key={option.label}
+              onClick={() => onChange({
+                ...filters,
+                source: option.value,
+                model: undefined,
+              })}
+              className={`inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors ${
+                active
+                  ? 'bg-white text-[#2d3d34] shadow-sm'
+                  : 'text-[#6b8578] hover:text-[#2d3d34]'
+              }`}
+            >
+              {option.value ? <SourceBadge source={option.value} compact /> : <span className="font-medium">All</span>}
+              <span className="text-xs text-[#8aa194]">{option.count}</span>
+            </button>
+          );
+        })}
+      </div>
+
       <div className="relative flex-1 max-w-md">
         <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#9aafa3]" />
         <input
@@ -97,7 +141,7 @@ export function FilterBar({ filters, onChange }: Props) {
           <option value="">All Models</option>
           {models.map(m => (
             <option key={m.model} value={m.model}>
-              {m.model.replace('claude-', '').split('-').slice(0, 2).join('-')} ({m.count})
+              {m.model} ({m.count})
             </option>
           ))}
         </select>

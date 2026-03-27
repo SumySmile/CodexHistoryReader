@@ -1,8 +1,9 @@
 import { Link } from 'react-router-dom';
 import { Star, MessageSquare, Clock, Wrench, Pencil } from 'lucide-react';
 import { Session, getLocalCustomTitle } from '../../lib/api';
-import { timeAgo, truncate, cn, formatTokens, sessionTitle } from '../../lib/utils';
+import { timeAgo, truncate, cn, formatTokens, sessionTitle, formatModelName } from '../../lib/utils';
 import { TagBadge } from '../tags/TagBadge';
+import { SourceBadge } from '../shared/SourceBadge';
 
 interface Props {
   session: Session;
@@ -27,10 +28,11 @@ export function ConversationCard({ session, onToggleFavorite, onSelectProject }:
         </button>
 
         <Link to={`/conversation/${session.id}`} className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5 min-w-0">
-            <h3 className="font-medium text-[#2d3d34] truncate">
+          <div className="flex items-center gap-2 min-w-0">
+            <h3 className="font-medium text-[#2d3d34] truncate flex-1 min-w-0">
               {sessionTitle(effectiveSummary, session.first_prompt)}
             </h3>
+            <SourceBadge source={session.source} compact />
             {(session.custom_title || localCustomTitle) && (
               <span
                 className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-[#e8f0eb] text-[#6b8578] shrink-0"
@@ -58,8 +60,11 @@ export function ConversationCard({ session, onToggleFavorite, onSelectProject }:
               {session.message_count} msgs
             </span>
             {session.model && (
-              <span className="text-[#4da87a] font-medium">
-                {session.model.replace('claude-', '').split('-').slice(0, 2).join('-')}
+              <span className={cn(
+                'font-medium',
+                session.source === 'codex' ? 'text-[#b96d1f]' : 'text-[#4da87a]',
+              )}>
+                {formatModelName(session.model, session.source)}
               </span>
             )}
             {session.total_input_tokens > 0 && (
