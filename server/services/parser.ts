@@ -1,7 +1,14 @@
 import fs from 'fs';
 import readline from 'readline';
 import path from 'path';
-import type { ParsedMessage, MessageContent, ToolResultContent, ToolUseAnswerValue, ToolUseQuestion, ToolUseResultData } from '../types.js';
+import type {
+  ParsedMessage,
+  MessageContent,
+  ToolResultContent,
+  ToolUseAnswerValue,
+  ToolUseQuestion,
+  ToolUseResultData,
+} from '../types.js';
 import { normalizeMessageText } from './text-normalization.js';
 
 export async function parseSession(filePath: string): Promise<ParsedMessage[]> {
@@ -11,46 +18,53 @@ export async function parseSession(filePath: string): Promise<ParsedMessage[]> {
   const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
   const rl = readline.createInterface({ input: stream });
 
-  // Track assistant message chunks by API message id
   const assistantChunks = new Map<string, ParsedMessage>();
-  // Track tool_use_id -> tool_name for tagging tool_results (e.g. AskUserQuestion answers)
   const toolUseNames = new Map<string, string>();
+  let syntheticCounter = 0;
+  const nextSyntheticId = (prefix: string) => `${prefix}-${++syntheticCounter}`;
 
   for await (const line of rl) {
     if (!line.trim()) continue;
     try {
       const obj = JSON.parse(line);
+      const record = obj.type === 'response_item' && obj.payload ? obj.payload : obj;
 
-      // Skip non-message types
-      if (['file-history-snapshot', 'progress', 'summary'].includes(obj.type)) continue;
+      if (
+        ['file-history-snapshot', 'progress', 'summary'].includes(record.type)
+        || obj.record_type === 'state'
+        || obj.type === 'event_msg'
+        || obj.type === 'turn_context'
+        || obj.type === 'session_meta'
+      ) {
+        continue;
+      }
 
-      if (obj.type === 'user') {
-        const msg = parseUserMessage(obj, toolUseNames);
+      if (record.type === 'user') {
+        const msg = parseClaudeUserMessage(record, toolUseNames);
         if (msg) messages.push(msg);
-      } else if (obj.type === 'assistant') {
-        const apiId = obj.message?.id;
+        continue;
+      }
+
+      if (record.type === 'assistant') {
+        const apiId = record.message?.id;
         if (apiId && assistantChunks.has(apiId)) {
-          // Merge content into existing message
           const existing = assistantChunks.get(apiId)!;
-          const newContent = extractAssistantContent(obj.message?.content || []);
+          const newContent = extractClaudeAssistantContent(record.message?.content || []);
           existing.content.push(...newContent);
-          // Track tool_use names from merged chunks
           for (const block of newContent) {
             if (block.type === 'tool_use' && block.id) {
               toolUseNames.set(block.id, block.name);
             }
           }
-          // Update token counts (take the latest/largest)
-          if (obj.message?.usage) {
-            existing.input_tokens = Math.max(existing.input_tokens, obj.message.usage.input_tokens || 0);
-            existing.output_tokens = Math.max(existing.output_tokens, obj.message.usage.output_tokens || 0);
+          if (record.message?.usage) {
+            existing.input_tokens = Math.max(existing.input_tokens, record.message.usage.input_tokens || 0);
+            existing.output_tokens = Math.max(existing.output_tokens, record.message.usage.output_tokens || 0);
           }
         } else {
-          const msg = parseAssistantMessage(obj);
+          const msg = parseClaudeAssistantMessage(record);
           if (msg) {
             messages.push(msg);
             if (apiId) assistantChunks.set(apiId, msg);
-            // Track tool_use names for tagging user tool_results
             for (const block of msg.content) {
               if (block.type === 'tool_use' && block.id) {
                 toolUseNames.set(block.id, block.name);
@@ -58,8 +72,41 @@ export async function parseSession(filePath: string): Promise<ParsedMessage[]> {
             }
           }
         }
-      } else if (obj.type === 'result') {
-        // result messages contain final usage/cost info, skip for display
+        continue;
+      }
+
+      if (record.type === 'result') {
+        continue;
+      }
+
+      if (record.type === 'message' && (record.role === 'user' || record.role === 'assistant')) {
+        const msg = parseCodexMessage(record, nextSyntheticId);
+        if (msg) messages.push(msg);
+        continue;
+      }
+
+      if (record.type === 'reasoning') {
+        const msg = parseCodexReasoning(record, nextSyntheticId);
+        if (msg) messages.push(msg);
+        continue;
+      }
+
+      if (record.type === 'function_call') {
+        const msg = parseCodexFunctionCall(record, nextSyntheticId);
+        if (msg) {
+          messages.push(msg);
+          for (const block of msg.content) {
+            if (block.type === 'tool_use' && block.id) {
+              toolUseNames.set(block.id, block.name);
+            }
+          }
+        }
+        continue;
+      }
+
+      if (record.type === 'function_call_output') {
+        const msg = parseCodexFunctionCallOutput(record, nextSyntheticId, toolUseNames);
+        if (msg) messages.push(msg);
       }
     } catch {
       // Skip unparseable lines
@@ -69,7 +116,7 @@ export async function parseSession(filePath: string): Promise<ParsedMessage[]> {
   return messages;
 }
 
-function parseUserMessage(obj: any, toolUseNames?: Map<string, string>): ParsedMessage | null {
+function parseClaudeUserMessage(obj: any, toolUseNames?: Map<string, string>): ParsedMessage | null {
   const content = obj.message?.content;
   if (!content) return null;
 
@@ -122,8 +169,8 @@ function parseUserMessage(obj: any, toolUseNames?: Map<string, string>): ParsedM
   };
 }
 
-function parseAssistantMessage(obj: any): ParsedMessage | null {
-  const content = extractAssistantContent(obj.message?.content || []);
+function parseClaudeAssistantMessage(obj: any): ParsedMessage | null {
+  const content = extractClaudeAssistantContent(obj.message?.content || []);
   if (content.length === 0) return null;
 
   return {
@@ -139,7 +186,7 @@ function parseAssistantMessage(obj: any): ParsedMessage | null {
   };
 }
 
-function extractAssistantContent(blocks: any[]): MessageContent[] {
+function extractClaudeAssistantContent(blocks: any[]): MessageContent[] {
   const result: MessageContent[] = [];
   for (const block of blocks) {
     if (block.type === 'text' && block.text) {
@@ -159,6 +206,118 @@ function extractAssistantContent(blocks: any[]): MessageContent[] {
   return result;
 }
 
+function parseCodexMessage(obj: any, nextSyntheticId: (prefix: string) => string): ParsedMessage | null {
+  const messageContent: MessageContent[] = [];
+
+  if (!Array.isArray(obj.content)) return null;
+
+  for (const block of obj.content) {
+    if ((block.type === 'input_text' || block.type === 'output_text') && typeof block.text === 'string') {
+      const normalized = normalizeMessageText(block.text);
+      if (normalized) messageContent.push({ type: 'text', text: normalized });
+    }
+  }
+
+  if (messageContent.length === 0) return null;
+
+  return {
+    uuid: typeof obj.id === 'string' && obj.id ? obj.id : nextSyntheticId(`codex-${obj.role}`),
+    role: obj.role,
+    type: obj.type,
+    content: messageContent,
+    timestamp: obj.timestamp || null,
+    model: typeof obj.model === 'string' ? obj.model : null,
+    input_tokens: 0,
+    output_tokens: 0,
+    duration_ms: null,
+  };
+}
+
+function parseCodexReasoning(obj: any, nextSyntheticId: (prefix: string) => string): ParsedMessage | null {
+  const summary = Array.isArray(obj.summary)
+    ? obj.summary
+      .filter((item: any) => item?.type === 'summary_text' && typeof item?.text === 'string')
+      .map((item: any) => normalizeMessageText(item.text))
+      .filter(Boolean)
+      .join('\n\n')
+    : '';
+
+  if (!summary) return null;
+
+  return {
+    uuid: typeof obj.id === 'string' && obj.id ? obj.id : nextSyntheticId('codex-reasoning'),
+    role: 'assistant',
+    type: obj.type,
+    content: [{ type: 'thinking', thinking: summary }],
+    timestamp: obj.timestamp || null,
+    model: null,
+    input_tokens: 0,
+    output_tokens: 0,
+    duration_ms: null,
+  };
+}
+
+function parseCodexFunctionCall(obj: any, nextSyntheticId: (prefix: string) => string): ParsedMessage | null {
+  if (typeof obj.name !== 'string' || !obj.name.trim()) return null;
+
+  const toolName = normalizeToolName(obj.name);
+  const toolId = typeof obj.call_id === 'string' && obj.call_id ? obj.call_id : (typeof obj.id === 'string' && obj.id ? obj.id : nextSyntheticId('codex-call'));
+
+  return {
+    uuid: typeof obj.id === 'string' && obj.id ? obj.id : nextSyntheticId('codex-tool-use'),
+    role: 'assistant',
+    type: obj.type,
+    content: [{
+      type: 'tool_use',
+      id: toolId,
+      name: toolName,
+      input: parseStructuredValue(obj.arguments),
+    }],
+    timestamp: obj.timestamp || null,
+    model: null,
+    input_tokens: 0,
+    output_tokens: 0,
+    duration_ms: null,
+  };
+}
+
+function parseCodexFunctionCallOutput(
+  obj: any,
+  nextSyntheticId: (prefix: string) => string,
+  toolUseNames?: Map<string, string>,
+): ParsedMessage | null {
+  const toolUseId = typeof obj.call_id === 'string' && obj.call_id ? obj.call_id : nextSyntheticId('codex-call-output');
+  const toolName = toolUseNames?.get(toolUseId);
+
+  const resultBlock: ToolResultContent = {
+    type: 'tool_result',
+    tool_use_id: toolUseId,
+    content: normalizeMessageText(getFunctionCallOutputText(obj.output)) || '',
+    ...(toolName ? { tool_name: toolName } : {}),
+  };
+
+  const toolUseResult = normalizeToolUseResultData(obj, { tool_use_id: toolUseId, content: obj.output }, toolName);
+  if (toolUseResult) {
+    resultBlock.toolUseResult = toolUseResult;
+  }
+
+  if (!resultBlock.content && !resultBlock.toolUseResult && !resultBlock.tool_name) {
+    return null;
+  }
+
+  return {
+    uuid: typeof obj.id === 'string' && obj.id ? obj.id : nextSyntheticId('codex-tool-result'),
+    role: 'user',
+    type: obj.type,
+    content: [resultBlock],
+    timestamp: obj.timestamp || null,
+    model: null,
+    input_tokens: 0,
+    output_tokens: 0,
+    duration_ms: null,
+  };
+}
+
 function resolveToolName(block: any, obj: any, toolUseNames?: Map<string, string>): string | undefined {
   const explicitName =
     block.tool_name
@@ -168,7 +327,7 @@ function resolveToolName(block: any, obj: any, toolUseNames?: Map<string, string
     || obj.toolUseResult?.toolName;
 
   if (typeof explicitName === 'string' && explicitName.trim()) {
-    return explicitName;
+    return normalizeToolName(explicitName);
   }
 
   const mapped = block.tool_use_id ? toolUseNames?.get(block.tool_use_id) : undefined;
@@ -196,6 +355,19 @@ function getNormalizedToolResultContent(block: any): string {
   return normalizeMessageText(text)?.slice(0, 10000) || '';
 }
 
+function getFunctionCallOutputText(value: unknown): string {
+  const parsed = parseStructuredValue(value);
+
+  if (parsed == null) return '';
+  if (typeof parsed === 'string') return parsed;
+  if (typeof parsed === 'object') {
+    const record = parsed as Record<string, unknown>;
+    if (typeof record.output === 'string') return record.output;
+  }
+
+  return JSON.stringify(parsed, null, 2);
+}
+
 function normalizeToolUseResultData(obj: any, block: any, toolName?: string): ToolUseResultData | undefined {
   const candidates = [
     obj.toolUseResult,
@@ -203,6 +375,7 @@ function normalizeToolUseResultData(obj: any, block: any, toolName?: string): To
     block.result,
     block.data,
     block.content,
+    obj.output,
   ];
 
   for (const candidate of candidates) {
@@ -219,7 +392,15 @@ function normalizeToolUseResultData(obj: any, block: any, toolName?: string): To
 }
 
 function toToolUseResultData(value: unknown): ToolUseResultData | undefined {
-  if (!value || typeof value !== 'object') return undefined;
+  if (!value) return undefined;
+
+  if (typeof value === 'string') {
+    const parsed = parseStructuredValue(value);
+    if (!parsed || typeof parsed === 'string') return undefined;
+    return toToolUseResultData(parsed);
+  }
+
+  if (typeof value !== 'object' || Array.isArray(value)) return undefined;
 
   const record = value as Record<string, unknown>;
   const questions = normalizeQuestions(record.questions);
@@ -339,6 +520,27 @@ function extractAskUserQuestionAnswersFromContent(content: unknown): ToolUseResu
     questions: Object.keys(answers).map(question => ({ question, options: [] })),
     answers,
   };
+}
+
+function parseStructuredValue(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function normalizeToolName(name: string): string {
+  switch (name) {
+    case 'shell':
+    case 'shell_command':
+      return 'Bash';
+    case 'request_user_input':
+      return 'AskUserQuestion';
+    default:
+      return name;
+  }
 }
 
 export async function parseSubagents(sessionFilePath: string): Promise<Map<string, ParsedMessage[]>> {

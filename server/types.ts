@@ -93,6 +93,12 @@ export interface SessionIndexEntry {
   gitBranch?: string;
 }
 
+export interface CodexSessionIndexEntry {
+  id: string;
+  thread_name?: string | null;
+  updated_at?: string | null;
+}
+
 export interface StatsData {
   totalSessions: number;
   totalMessages: number;

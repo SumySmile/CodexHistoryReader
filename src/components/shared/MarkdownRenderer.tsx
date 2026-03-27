@@ -21,7 +21,7 @@ export function MarkdownRenderer({ content }: Props) {
           }
           return (
             <CodeBlock language={match?.[1] || ''}>
-              {String(children).replace(/\n$/, '')}
+              {children}
             </CodeBlock>
           );
         },

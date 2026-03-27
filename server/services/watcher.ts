@@ -1,7 +1,7 @@
 import chokidar from 'chokidar';
 import path from 'path';
 import fs from 'fs';
-import { PROJECTS_DIR } from '../config.js';
+import { CODEX_SESSION_INDEX_PATH, CODEX_SESSIONS_DIR, PROJECTS_DIR } from '../config.js';
 import { scanAllProjects } from './scanner.js';
 import { reindexSession } from './indexer.js';
 import { getDb } from '../db/connection.js';
@@ -20,14 +20,17 @@ function notifyListeners(type: string, sessionId?: string): void {
 }
 
 export function startWatcher(): void {
-  if (!fs.existsSync(PROJECTS_DIR)) {
-    console.warn('[watcher] Projects dir not found:', PROJECTS_DIR);
+  const watchTargets = [PROJECTS_DIR, CODEX_SESSIONS_DIR, CODEX_SESSION_INDEX_PATH]
+    .filter(target => fs.existsSync(target));
+
+  if (watchTargets.length === 0) {
+    console.warn('[watcher] No history directories found to watch');
     return;
   }
 
-  const watcher = chokidar.watch(PROJECTS_DIR, {
+  const watcher = chokidar.watch(watchTargets, {
     ignoreInitial: true,
-    depth: 3,
+    depth: 6,
     ignored: [/node_modules/, /\.git/],
     awaitWriteFinish: { stabilityThreshold: 2000, pollInterval: 500 },
   });
@@ -35,13 +38,13 @@ export function startWatcher(): void {
   watcher.on('add', (filePath) => handleFileChange(filePath, 'add'));
   watcher.on('change', (filePath) => handleFileChange(filePath, 'change'));
 
-  console.log('[watcher] Watching for changes in', PROJECTS_DIR);
+  console.log('[watcher] Watching for changes in', watchTargets.join(', '));
 }
 
 async function handleFileChange(filePath: string, event: string): Promise<void> {
   const basename = path.basename(filePath);
 
-  if (basename === 'sessions-index.json') {
+  if (basename === 'sessions-index.json' || basename === 'session_index.jsonl') {
     console.log(`[watcher] Index changed: ${filePath}`);
     await scanAllProjects();
     notifyListeners('scan-complete');
@@ -49,28 +52,30 @@ async function handleFileChange(filePath: string, event: string): Promise<void> 
   }
 
   if (basename.endsWith('.jsonl')) {
-    const sessionId = basename.replace('.jsonl', '');
-    console.log(`[watcher] Session ${event}: ${sessionId}`);
-
-    // Update mtime in DB
+    console.log(`[watcher] Session ${event}: ${filePath}`);
     const db = getDb();
+
+    await scanAllProjects();
+
+    const session = db.prepare('SELECT id, indexed_at FROM sessions WHERE file_path = ?').get(filePath) as {
+      id: string;
+      indexed_at: string | null;
+    } | undefined;
+
     try {
       const stat = fs.statSync(filePath);
-      db.prepare('UPDATE sessions SET file_mtime = ?, modified_at = ? WHERE id = ?')
-        .run(stat.mtimeMs, new Date(stat.mtimeMs).toISOString(), sessionId);
+      if (session?.id) {
+        db.prepare('UPDATE sessions SET file_mtime = ?, modified_at = ? WHERE id = ?')
+          .run(stat.mtimeMs, new Date(stat.mtimeMs).toISOString(), session.id);
+      }
     } catch (e) {
       console.warn('[watcher] stat failed', filePath, ':', (e as Error).message);
     }
 
-    // Re-scan to pick up new sessions
-    await scanAllProjects();
-
-    // Re-index if it was already indexed
-    const session = db.prepare('SELECT indexed_at FROM sessions WHERE id = ?').get(sessionId) as any;
     if (session?.indexed_at) {
-      await reindexSession(sessionId, filePath);
+      await reindexSession(session.id, filePath);
     }
 
-    notifyListeners('session-updated', sessionId);
+    notifyListeners('session-updated', session?.id);
   }
 }

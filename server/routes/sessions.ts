@@ -5,7 +5,11 @@ import { exportSession } from '../services/exporter.js';
 
 const router = Router();
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+function isValidSessionId(value: string): boolean {
+  return SESSION_ID_RE.test(value);
+}
 
 interface SessionRow {
   id: string;
@@ -210,7 +214,7 @@ router.get('/', (req, res) => {
 
 // GET /api/sessions/:id/messages - Get full conversation
 router.get('/:id/messages', async (req, res) => {
-  if (!UUID_RE.test(req.params.id)) return res.status(400).json({ error: 'Invalid session ID' });
+  if (!isValidSessionId(req.params.id)) return res.status(400).json({ error: 'Invalid session ID' });
   try {
     const db = getDb();
     const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(req.params.id) as SessionRow | undefined;
@@ -262,7 +266,7 @@ router.get('/:id/messages', async (req, res) => {
 });
 
 const handleUpdateTitle = (req: any, res: any) => {
-  if (!UUID_RE.test(req.params.id)) return res.status(400).json({ error: 'Invalid session ID' });
+  if (!isValidSessionId(req.params.id)) return res.status(400).json({ error: 'Invalid session ID' });
   const titleRaw = typeof req.body?.title === 'string' ? req.body.title : '';
   const title = titleRaw.trim();
   if (title.length > 120) return res.status(400).json({ error: 'Title too long (max 120 chars)' });
@@ -286,7 +290,7 @@ router.put('/:id/title', handleUpdateTitle);
 
 // PATCH /api/sessions/:id/favorite - Toggle favorite
 router.patch('/:id/favorite', (req, res) => {
-  if (!UUID_RE.test(req.params.id)) return res.status(400).json({ error: 'Invalid session ID' });
+  if (!isValidSessionId(req.params.id)) return res.status(400).json({ error: 'Invalid session ID' });
   const db = getDb();
   const session = db.prepare('SELECT is_favorite FROM sessions WHERE id = ?').get(req.params.id) as Pick<SessionRow, 'is_favorite'> | undefined;
   if (!session) return res.status(404).json({ error: 'Session not found' });
@@ -298,7 +302,7 @@ router.patch('/:id/favorite', (req, res) => {
 
 // GET /api/sessions/:id/export - Export session
 router.get('/:id/export', async (req, res) => {
-  if (!UUID_RE.test(req.params.id)) return res.status(400).json({ error: 'Invalid session ID' });
+  if (!isValidSessionId(req.params.id)) return res.status(400).json({ error: 'Invalid session ID' });
   try {
     const format = (req.query.format as string) === 'json' ? 'json' : 'md';
     const content = await exportSession(req.params.id, format);

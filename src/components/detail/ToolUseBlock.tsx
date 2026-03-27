@@ -11,7 +11,7 @@ interface Props {
 const TOOL_ICONS: Record<string, typeof Wrench> = {
   Read: FileText, Write: FileText, Edit: Pencil, Bash: Terminal,
   Glob: FolderSearch, Grep: Search, WebFetch: Globe, WebSearch: Globe,
-  AskUserQuestion: HelpCircle,
+  AskUserQuestion: HelpCircle, update_plan: FileText, apply_patch: Pencil,
 };
 
 const TOOL_COLORS: Record<string, string> = {
@@ -25,6 +25,8 @@ const TOOL_COLORS: Record<string, string> = {
   WebFetch: 'text-[#6878c0]',
   WebSearch: 'text-[#48a890]',
   AskUserQuestion: 'text-[#b07840]',
+  update_plan: 'text-[#6e8bc2]',
+  apply_patch: 'text-[#c5a042]',
 };
 
 function getLang(filePath: string): string {
@@ -94,8 +96,10 @@ function ToolContent({ name, obj, fallback }: { name: string; obj: Record<string
   if (!obj) return <RawBlock text={fallback} />;
   switch (name) {
     case 'ExitPlanMode': return <ExitPlanContent sendMessageToUser={obj.sendMessageToUser} plan={obj.plan} />;
+    case 'update_plan': return <RawBlock text={JSON.stringify(obj, null, 2)} />;
     case 'Write': return <WriteContent filePath={obj.file_path} content={obj.content} />;
     case 'Edit': return <EditContent filePath={obj.file_path} oldStr={obj.old_string} newStr={obj.new_string} />;
+    case 'apply_patch': return <RawBlock text={typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2)} />;
     case 'Bash': return <BashContent command={obj.command} description={obj.description} />;
     case 'Read': return <ReadContent filePath={obj.file_path} offset={obj.offset} limit={obj.limit} />;
     case 'Grep': return <GrepContent pattern={obj.pattern} path={obj.path} glob={obj.glob} />;
@@ -285,6 +289,8 @@ function getPreview(name: string, input: unknown): string {
     case 'Task': return obj.description || '';
     case 'WebFetch': return obj.url || '';
     case 'WebSearch': return obj.query || '';
+    case 'update_plan': return JSON.stringify(obj).slice(0, 80);
+    case 'apply_patch': return 'Patch';
     case 'AskUserQuestion': {
       const qs = obj.questions as any[] | undefined;
       if (qs?.length) return qs[0]?.question?.slice(0, 80) || '';

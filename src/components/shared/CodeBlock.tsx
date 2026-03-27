@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { ReactNode, useState } from 'react';
 import { Copy, Check } from 'lucide-react';
 
 interface Props {
-  children: string;
+  children: ReactNode;
   language: string;
 }
 
@@ -10,7 +10,7 @@ export function CodeBlock({ children, language }: Props) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(children);
+    navigator.clipboard.writeText(extractText(children));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -34,4 +34,14 @@ export function CodeBlock({ children, language }: Props) {
       </pre>
     </div>
   );
+}
+
+function extractText(node: ReactNode): string {
+  if (node == null || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(extractText).join('');
+  if (typeof node === 'object' && 'props' in node) {
+    return extractText((node as { props?: { children?: ReactNode } }).props?.children);
+  }
+  return '';
 }
