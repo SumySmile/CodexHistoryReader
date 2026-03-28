@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useConversations } from '../hooks/useConversations';
 import { ConversationList } from '../components/conversations/ConversationList';
 import { FilterBar } from '../components/conversations/FilterBar';
@@ -18,9 +19,57 @@ interface Filters {
   max_tokens?: string;
 }
 
+function readFiltersFromSearchParams(params: URLSearchParams): Filters {
+  const getValue = (key: keyof Filters) => params.get(key)?.trim() || undefined;
+  return {
+    source: getValue('source'),
+    project: getValue('project'),
+    favorite: getValue('favorite'),
+    tag: getValue('tag'),
+    search: getValue('search'),
+    sort: getValue('sort'),
+    order: getValue('order'),
+    model: getValue('model'),
+    min_tokens: getValue('min_tokens'),
+    max_tokens: getValue('max_tokens'),
+  };
+}
+
+function buildSearchParams(filters: Filters, page: number): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value) params.set(key, value);
+  }
+  if (page > 1) params.set('page', String(page));
+  return params;
+}
+
 export function HomePage() {
-  const [filters, setFilters] = useState<Filters>({});
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [filters, setFilters] = useState<Filters>(() => readFiltersFromSearchParams(searchParams));
   const { data, loading, error, page, setPage, toggleFavorite } = useConversations(filters);
+  const returnTo = useMemo(() => {
+    const params = buildSearchParams(filters, page);
+    const query = params.toString();
+    return query ? `/?${query}` : '/';
+  }, [filters, page]);
+
+  useEffect(() => {
+    setFilters(readFiltersFromSearchParams(searchParams));
+    const rawPage = Number(searchParams.get('page') || '1');
+    const nextPage = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+    setPage(prev => (prev === nextPage ? prev : nextPage));
+  }, [searchParams, setPage]);
+
+  useEffect(() => {
+    const nextParams = buildSearchParams(filters, page);
+    const nextQuery = nextParams.toString();
+    const currentQuery = searchParams.toString();
+    if (nextQuery !== currentQuery) {
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [filters, page, searchParams, setSearchParams]);
+
   const scopeLabel = filters.source === 'codex'
     ? 'Codex'
     : filters.source === 'copilot'
@@ -66,6 +115,7 @@ export function HomePage() {
               sessions={data.sessions}
               onToggleFavorite={toggleFavorite}
               onSelectProject={handleSelectProject}
+              returnTo={returnTo}
             />
             {data.pagination.totalPages > 1 && (
               <div className="flex items-center justify-center gap-4 mt-6 pb-4">

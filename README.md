@@ -1,12 +1,12 @@
 # Claude / Codex / Copilot History Viewer
 
-浏览、搜索、管理本机 AI 编程会话历史的本地工具。
+本地浏览、搜索、管理 AI 编程会话历史的工具。
 
 当前已支持：
 - Claude Code
 - Codex
 - GitHub Copilot Chat（VS Code）
-- Cursor（优先读取 `globalStorage/state.vscdb`，并结合 `agent-transcripts` / `workspaceStorage/state.vscdb` 兜底）
+- Cursor
 
 项目最初只支持 Claude，现已扩展为多来源统一扫描、统一解析、统一展示。
 
@@ -24,7 +24,7 @@
 - 统计页
 - 本地文件变化监听，新增或变更会话后自动入库
 
-## 当前支持的数据来源
+## 数据来源
 
 ### 1. Claude Code
 
@@ -52,6 +52,7 @@
 ```
 
 兼容格式：
+
 - 旧格式
   - `message`
   - `reasoning`
@@ -63,7 +64,7 @@
   - `event_msg`
   - `turn_context`
 
-写入数据库时会统一加前缀，避免与其他来源冲突：
+写入数据库时统一加前缀：
 
 ```text
 codex-<raw-session-id>
@@ -78,10 +79,10 @@ codex-<raw-session-id>
 ```
 
 当前能力：
-- 解析用户请求与助手回复
+- 解析用户请求和助手回复
 - 回退工作区路径
 - 统一归类为 `Copilot`
-- 宿主标签显示为 `Code`
+- 宿主标签显示为 `VSCode`
 
 会话 ID 形式：
 
@@ -91,7 +92,7 @@ copilot-code-<raw-session-id>
 
 ### 4. Cursor
 
-Cursor 不是按“每会话一个 JSON 文件”存储，而是分散在 SQLite 和 Cursor 自有目录中。
+Cursor 不像 VS Code Copilot 那样按“每会话一个 JSON 文件”存储，而是分散在 SQLite 和 Cursor 自有目录中。
 
 当前读取优先级：
 
@@ -116,10 +117,10 @@ copilot-cursor-<workspace-id>
 ```
 
 说明：
-- 当前版本优先保证“内容尽量完整”
-- Cursor 的一些专有结构仍然是原始结果块展示，后续可再做结构化 UI
+- 当前版本优先保证内容尽量完整
+- Cursor 一些专有结构仍以原始结果块展示，后续可以继续做结构化 UI
 
-## 技术结构
+## 技术栈
 
 ### 前端
 
@@ -222,11 +223,11 @@ npm run preview
 5. 启动文件监听
 6. 后台构建全文索引
 
-这意味着：
+说明：
 - 页面会先可用，再逐步补全索引和统计
 - 第一次扫描较多历史时，搜索结果会稍后完整
 
-## 前端展示说明
+## 前端行为
 
 ### 首页
 
@@ -239,10 +240,21 @@ npm run preview
 - 排序
 - 收藏筛选
 
-会话卡片与详情页都会显示来源徽标。
+会话卡片与详情页都会显示来源徽标。  
 对于 Copilot，还会额外显示宿主标签：
-- `Code`
+- `VSCode`
 - `Cursor`
+
+### 筛选状态保留
+
+首页筛选和分页会同步到 URL 查询参数。  
+这意味着：
+
+- 先切到 `Copilot`
+- 再进入任意会话
+- 从详情页返回
+
+列表会保留原来的筛选和分页状态，而不是回到默认首页。
 
 ### 会话详情页
 
@@ -285,7 +297,7 @@ npm run preview
 - `GET /api/indexing-status`
 - `GET /api/events`
 
-## 最近完成的兼容性修复
+## 最近完成的兼容性与功能更新
 
 - `start.bat` 去绝对路径，支持任意目录启动
 - 首次启动自动 `npm install`
@@ -296,14 +308,16 @@ npm run preview
 - 新增 Codex 新旧格式兼容
 - 新增 VS Code Copilot 会话支持
 - 新增 Cursor 会话支持
-- Cursor 现已支持工具调用 / 工具结果进入消息流
+- Cursor 已支持工具调用 / 工具结果进入消息流
 - 全文索引已纳入工具输入、工具结果、引用路径
+- `Copilot` 宿主标签中的 `Code` 已改为 `VSCode`
+- 从列表进入详情后，返回时会保留筛选和分页状态
 
 ## 当前已知现状
 
 - Cursor 已能读到较完整正文，但部分工具结果仍以原始文本块显示
 - Cursor 的更多专有结构还可以继续细化展示
-- Copilot / Cursor 的模型字段不一定稳定存在，因此前端展示对模型做了宽松处理
+- Copilot / Cursor 的模型字段不一定稳定存在，因此前端对模型做了宽松处理
 - 某些旧历史数据本身编码异常时，原始文本可能仍会包含异常字符
 
 ## 排障
@@ -340,12 +354,11 @@ npm run preview
 - 索引是否已完成构建
 - 新改动后的服务是否已重启
 
-## 后续开发建议
+## 后续建议
 
-如果继续扩展，建议优先做：
-
-- 把 Cursor 常见工具结果做结构化展示
-- 把 Cursor 的更多元数据块做更贴近原生的 UI
+建议优先做：
+- 将 Cursor 常见工具结果做结构化展示
+- 将 Cursor 更多元数据块做更贴近原生的 UI
 - 继续增强来源维度统计
 - 将扫描器与解析器按来源进一步模块化
 

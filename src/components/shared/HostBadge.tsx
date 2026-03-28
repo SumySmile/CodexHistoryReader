@@ -9,7 +9,7 @@ const HOST_STYLES: Record<'code' | 'cursor', string> = {
 };
 
 const HOST_LABELS: Record<'code' | 'cursor', string> = {
-  code: 'Code',
+  code: 'VSCode',
   cursor: 'Cursor',
 };
 

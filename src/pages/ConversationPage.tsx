@@ -1,4 +1,4 @@
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useSessionDetail } from '../hooks/useConversations';
 import { useTags } from '../hooks/useTags';
 import { MessageList } from '../components/detail/MessageList';
@@ -13,6 +13,7 @@ import { HostBadge } from '../components/shared/HostBadge';
 
 export function ConversationPage() {
   const { id } = useParams<{ id: string }>();
+  const location = useLocation();
   const navigate = useNavigate();
   const { data, loading, error } = useSessionDetail(id);
   const { tags, create: createTag, addToSession, removeFromSession, reload: reloadTags } = useTags();
@@ -21,6 +22,9 @@ export function ConversationPage() {
   const [titleInput, setTitleInput] = useState('');
   const [titleSaving, setTitleSaving] = useState(false);
   const [titleError, setTitleError] = useState<string | null>(null);
+  const returnTo = typeof location.state?.returnTo === 'string' && location.state.returnTo
+    ? location.state.returnTo
+    : '/';
 
   const handleToggleFav = useCallback(async () => {
     if (!id) return;
@@ -80,7 +84,7 @@ export function ConversationPage() {
       <div className="flex flex-col items-center justify-center h-full text-[#9aafa3]">
         <p className="text-lg">Failed to load conversation</p>
         <p className="text-sm mt-1">{error}</p>
-        <Link to="/" className="mt-4 text-[#7ec8a0] hover:text-[#65b589]">Back to list</Link>
+        <Link to={returnTo} className="mt-4 text-[#7ec8a0] hover:text-[#65b589]">Back to list</Link>
       </div>
     );
   }
@@ -123,7 +127,7 @@ export function ConversationPage() {
     <div className="h-full flex flex-col">
       <div className="bg-white border-b border-[#d0ddd5] px-4 py-3 shadow-sm">
         <div className="flex items-center gap-3">
-          <Link to="/" className="text-[#6b8578] hover:text-[#2d3d34] transition-colors">
+          <Link to={returnTo} className="text-[#6b8578] hover:text-[#2d3d34] transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <div className="flex-1 min-w-0">

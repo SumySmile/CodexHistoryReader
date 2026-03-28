@@ -88,7 +88,7 @@ function getHostFromSession(row: Pick<SessionRow, 'id' | 'file_path'>): 'code' |
 }
 
 function getHostLabel(host: 'code' | 'cursor' | null): string | null {
-  if (host === 'code') return 'Code';
+  if (host === 'code') return 'VSCode';
   if (host === 'cursor') return 'Cursor';
   return null;
 }

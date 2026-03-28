@@ -10,9 +10,10 @@ interface Props {
   session: Session;
   onToggleFavorite: (id: string) => void;
   onSelectProject?: (projectSlug: string) => void;
+  returnTo?: string;
 }
 
-export function ConversationCard({ session, onToggleFavorite, onSelectProject }: Props) {
+export function ConversationCard({ session, onToggleFavorite, onSelectProject, returnTo }: Props) {
   const localCustomTitle = getLocalCustomTitle(session.id);
   const effectiveSummary = localCustomTitle || session.custom_title || session.summary;
   return (
@@ -28,7 +29,11 @@ export function ConversationCard({ session, onToggleFavorite, onSelectProject }:
           <Star size={16} fill={session.is_favorite ? 'currentColor' : 'none'} />
         </button>
 
-        <Link to={`/conversation/${session.id}`} className="flex-1 min-w-0">
+        <Link
+          to={`/conversation/${session.id}`}
+          state={returnTo ? { returnTo } : undefined}
+          className="flex-1 min-w-0"
+        >
           <div className="flex items-center gap-2 min-w-0">
             <h3 className="font-medium text-[#2d3d34] truncate flex-1 min-w-0">
               {sessionTitle(effectiveSummary, session.first_prompt)}

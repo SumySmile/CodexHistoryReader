@@ -5,9 +5,10 @@ interface Props {
   sessions: Session[];
   onToggleFavorite: (id: string) => void;
   onSelectProject?: (projectSlug: string) => void;
+  returnTo?: string;
 }
 
-export function ConversationList({ sessions, onToggleFavorite, onSelectProject }: Props) {
+export function ConversationList({ sessions, onToggleFavorite, onSelectProject, returnTo }: Props) {
   if (sessions.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-[#9aafa3]">
@@ -25,6 +26,7 @@ export function ConversationList({ sessions, onToggleFavorite, onSelectProject }
           session={session}
           onToggleFavorite={onToggleFavorite}
           onSelectProject={onSelectProject}
+          returnTo={returnTo}
         />
       ))}
     </div>
