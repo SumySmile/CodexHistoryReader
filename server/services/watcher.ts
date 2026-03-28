@@ -4,11 +4,14 @@ import fs from 'fs';
 import {
   CODEX_SESSION_INDEX_PATH,
   CODEX_SESSIONS_DIR,
+  CURSOR_COPILOT_WORKSPACE_STORAGE_DIR,
+  CURSOR_GLOBAL_STORAGE_DB_PATH,
+  CURSOR_PROJECTS_DIR,
   PROJECTS_DIR,
   VSCODE_COPILOT_WORKSPACE_STORAGE_DIR,
 } from '../config.js';
 import { scanAllProjects } from './scanner.js';
-import { reindexSession } from './indexer.js';
+import { buildIndex, reindexSession } from './indexer.js';
 import { getDb } from '../db/connection.js';
 
 type ChangeListener = (type: string, sessionId?: string) => void;
@@ -30,6 +33,9 @@ export function startWatcher(): void {
     CODEX_SESSIONS_DIR,
     CODEX_SESSION_INDEX_PATH,
     VSCODE_COPILOT_WORKSPACE_STORAGE_DIR,
+    CURSOR_COPILOT_WORKSPACE_STORAGE_DIR,
+    CURSOR_GLOBAL_STORAGE_DB_PATH,
+    CURSOR_PROJECTS_DIR,
   ]
     .filter(target => fs.existsSync(target));
 
@@ -57,17 +63,26 @@ async function handleFileChange(filePath: string, event: string): Promise<void> 
   if (basename === 'sessions-index.json' || basename === 'session_index.jsonl' || basename === 'workspace.json') {
     console.log(`[watcher] Index changed: ${filePath}`);
     await scanAllProjects();
+    await buildIndex();
     notifyListeners('scan-complete');
     return;
   }
 
-  const isCopilotSession = basename.endsWith('.json') && filePath.includes(`${path.sep}chatSessions${path.sep}`);
+  const isCopilotJsonSession = basename.endsWith('.json') && filePath.includes(`${path.sep}chatSessions${path.sep}`);
+  const isCursorStateDb = basename === 'state.vscdb' && filePath.includes(`${path.sep}workspaceStorage${path.sep}`);
+  const isCursorGlobalStateDb = basename === 'state.vscdb' && filePath.includes(`${path.sep}globalStorage${path.sep}`);
 
-  if (basename.endsWith('.jsonl') || isCopilotSession) {
+  if (basename.endsWith('.jsonl') || isCopilotJsonSession || isCursorStateDb || isCursorGlobalStateDb) {
     console.log(`[watcher] Session ${event}: ${filePath}`);
     const db = getDb();
 
     await scanAllProjects();
+
+    if (isCursorGlobalStateDb) {
+      await buildIndex();
+      notifyListeners('scan-complete');
+      return;
+    }
 
     const session = db.prepare('SELECT id, indexed_at FROM sessions WHERE file_path = ?').get(filePath) as {
       id: string;

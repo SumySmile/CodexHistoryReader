@@ -53,7 +53,16 @@ async function indexSession(
       .flatMap((block) => {
         if (block.type === 'text') return [block.text];
         if (block.type === 'thinking') return [block.thinking];
-        if (block.type === 'references') return block.items.map(item => item.path);
+        if (block.type === 'references') return block.items.flatMap(item => [item.label || '', item.path]);
+        if (block.type === 'tool_use') {
+          return [
+            block.name,
+            typeof block.input === 'string' ? block.input : JSON.stringify(block.input, null, 2),
+          ];
+        }
+        if (block.type === 'tool_result') {
+          return [block.tool_name || '', block.content];
+        }
         return [];
       })
       .filter(Boolean)

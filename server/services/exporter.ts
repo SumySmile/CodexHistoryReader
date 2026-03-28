@@ -1,5 +1,5 @@
 import { parseSession } from './parser.js';
-import type { ParsedMessage, MessageContent, ToolResultContent, ToolUseAnswerValue, ToolUseResultData } from '../types.js';
+import type { ParsedMessage, ToolResultContent, ToolUseAnswerValue, ToolUseResultData } from '../types.js';
 import { getDb } from '../db/connection.js';
 
 export async function exportSession(sessionId: string, format: 'md' | 'json'): Promise<string> {
@@ -30,50 +30,47 @@ function exportAsMarkdown(session: any, messages: ParsedMessage[]): string {
 
   for (const msg of messages) {
     if (msg.role === 'user') {
-      lines.push('## 🧑 User');
+      lines.push('## 用户');
       lines.push('');
-      for (const block of msg.content) {
-        if (block.type === 'text') {
-          lines.push(block.text);
-        } else if (block.type === 'references') {
-          lines.push(...formatReferencesBlock(block.items));
-        } else if (block.type === 'tool_result') {
-          if (block.tool_name === 'AskUserQuestion') {
-            lines.push(...formatAskUserQuestionResult(block));
-          } else {
-            lines.push(`<details><summary>Tool Result (${block.tool_use_id})</summary>`);
-            lines.push('');
-            lines.push('```');
-            lines.push(block.content.slice(0, 5000));
-            lines.push('```');
-            lines.push('</details>');
-          }
-        }
-        lines.push('');
-      }
     } else if (msg.role === 'assistant') {
-      lines.push('## 🤖 Assistant');
+      lines.push('## 助手');
       if (msg.model) lines.push(`*Model: ${msg.model}*`);
       lines.push('');
-      for (const block of msg.content) {
-        if (block.type === 'text') {
-          lines.push(block.text);
-        } else if (block.type === 'references') {
-          lines.push(...formatReferencesBlock(block.items));
-        } else if (block.type === 'thinking') {
-          lines.push('<details><summary>💭 Thinking</summary>');
-          lines.push('');
-          lines.push(block.thinking.slice(0, 10000));
-          lines.push('</details>');
-        } else if (block.type === 'tool_use') {
-          lines.push(`**🔧 Tool: ${block.name}**`);
-          lines.push('```json');
-          lines.push(JSON.stringify(block.input, null, 2).slice(0, 3000));
-          lines.push('```');
-        }
-        lines.push('');
-      }
+    } else {
+      lines.push('## 系统');
+      lines.push('');
     }
+
+    for (const block of msg.content) {
+      if (block.type === 'text') {
+        lines.push(block.text);
+      } else if (block.type === 'references') {
+        lines.push(...formatReferencesBlock(block.items));
+      } else if (block.type === 'thinking') {
+        lines.push('<details><summary>思考</summary>');
+        lines.push('');
+        lines.push(block.thinking.slice(0, 10000));
+        lines.push('</details>');
+      } else if (block.type === 'tool_use') {
+        lines.push(`**工具：${block.name}**`);
+        lines.push('```json');
+        lines.push(JSON.stringify(block.input, null, 2).slice(0, 5000));
+        lines.push('```');
+      } else if (block.type === 'tool_result') {
+        if (block.tool_name === 'AskUserQuestion') {
+          lines.push(...formatAskUserQuestionResult(block));
+        } else {
+          lines.push(`<details><summary>工具结果（${block.tool_name || block.tool_use_id}）</summary>`);
+          lines.push('');
+          lines.push('```');
+          lines.push(block.content.slice(0, 5000));
+          lines.push('```');
+          lines.push('</details>');
+        }
+      }
+      lines.push('');
+    }
+
     lines.push('---');
     lines.push('');
   }
@@ -83,7 +80,7 @@ function exportAsMarkdown(session: any, messages: ParsedMessage[]): string {
 
 function formatAskUserQuestionResult(block: ToolResultContent): string[] {
   const lines: string[] = [];
-  lines.push('**User answered Claude\'s questions**');
+  lines.push('**用户回答了 Claude 的问题**');
   lines.push('');
 
   const structured = block.toolUseResult;
@@ -118,7 +115,7 @@ function formatReferencesBlock(items: { label?: string; path: string }[]): strin
   const lines: string[] = [];
   if (items.length === 0) return lines;
 
-  lines.push('**References**');
+  lines.push('**参考文件**');
   for (const item of items) {
     lines.push(`- ${item.label ? `${item.label}: ` : ''}\`${item.path}\``);
   }

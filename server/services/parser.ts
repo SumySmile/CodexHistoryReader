@@ -1,6 +1,8 @@
 import fs from 'fs';
 import readline from 'readline';
 import path from 'path';
+import type { CursorComposerHead, CursorComposerMetadata, CursorGenerationEntry, CursorWorkspaceState } from './cursor-state.js';
+import { findCursorComposerMetadata, parseCursorComposerVirtualPath, readCursorComposerConversation, readCursorWorkspaceState } from './cursor-state.js';
 import type {
   ParsedMessage,
   MessageContent,
@@ -12,7 +14,20 @@ import type {
 import { normalizeMessageText } from './text-normalization.js';
 
 export async function parseSession(filePath: string): Promise<ParsedMessage[]> {
-  if (!fs.existsSync(filePath)) return [];
+  const virtualComposerPath = parseCursorComposerVirtualPath(filePath);
+  if (!virtualComposerPath && !fs.existsSync(filePath)) return [];
+
+  if (virtualComposerPath) {
+    return parseCursorComposerSessionById(virtualComposerPath.composerId);
+  }
+
+  if (isCursorTranscriptPath(filePath)) {
+    return parseCursorTranscriptSession(filePath);
+  }
+
+  if (path.extname(filePath).toLowerCase() === '.vscdb') {
+    return parseCursorSession(filePath);
+  }
 
   if (path.extname(filePath).toLowerCase() === '.json') {
     return parseCopilotSession(filePath);
@@ -115,6 +130,267 @@ export async function parseSession(filePath: string): Promise<ParsedMessage[]> {
     } catch {
       // Skip unparseable lines
     }
+  }
+
+  return messages;
+}
+
+function parseCursorComposerSessionById(composerId: string): ParsedMessage[] {
+  const conversation = readCursorComposerConversation(composerId);
+  if (conversation.bubbles.length === 0) return [];
+  return parseCursorComposerConversation(conversation.metadata, conversation.bubbles);
+}
+
+async function parseCursorTranscriptSession(filePath: string): Promise<ParsedMessage[]> {
+  const composerId = path.basename(filePath, '.jsonl');
+  const conversation = readCursorComposerConversation(composerId);
+  if (conversation.bubbles.length > 0) {
+    return parseCursorComposerConversation(conversation.metadata, conversation.bubbles);
+  }
+
+  const messages: ParsedMessage[] = [];
+  const metadata = conversation.metadata;
+  const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
+  const rl = readline.createInterface({ input: stream });
+  let index = 0;
+
+  for await (const line of rl) {
+    if (!line.trim()) continue;
+
+    try {
+      const obj = JSON.parse(line);
+      if (obj?.role !== 'user' && obj?.role !== 'assistant') continue;
+
+      const blocks = Array.isArray(obj?.message?.content) ? obj.message.content : [];
+      const text = normalizeMessageText(
+        blocks
+          .filter((block: any) => block?.type === 'text' && typeof block?.text === 'string')
+          .map((block: any) => obj.role === 'user' ? unwrapCursorTranscriptUserText(block.text) : block.text)
+          .join('\n\n')
+      );
+
+      if (!text) continue;
+
+      messages.push({
+        uuid: `cursor-transcript-${composerId}-${++index}`,
+        role: obj.role,
+        type: 'cursor_transcript',
+        content: [{ type: 'text', text }],
+        timestamp: null,
+        model: null,
+        input_tokens: 0,
+        output_tokens: 0,
+        duration_ms: null,
+      });
+    } catch {
+      // Skip unparseable lines
+    }
+  }
+
+  const metadataContent = buildCursorTranscriptMetadataContent(metadata);
+  if (metadataContent.length > 0) {
+    messages.unshift({
+      uuid: `cursor-transcript-meta-${composerId}`,
+      role: 'assistant',
+      type: 'cursor_workspace',
+      content: metadataContent,
+      timestamp: null,
+      model: null,
+      input_tokens: 0,
+      output_tokens: 0,
+      duration_ms: null,
+    });
+  }
+
+  return messages;
+}
+
+function parseCursorComposerConversation(
+  metadata: CursorComposerMetadata | null,
+  bubbles: ReturnType<typeof readCursorComposerConversation>['bubbles'],
+): ParsedMessage[] {
+  const messages: ParsedMessage[] = [];
+  const metadataContent = buildCursorTranscriptMetadataContent(metadata);
+
+  if (metadataContent.length > 0) {
+    messages.push({
+      uuid: `cursor-transcript-meta-${metadata?.composerId || 'unknown'}`,
+      role: 'assistant',
+      type: 'cursor_workspace',
+      content: metadataContent,
+      timestamp: bubbles[0]?.createdAt || null,
+      model: null,
+      input_tokens: 0,
+      output_tokens: 0,
+      duration_ms: null,
+    });
+  }
+
+  for (const bubble of bubbles) {
+    if (bubble.thinking) {
+      messages.push({
+        uuid: `cursor-bubble-thinking-${bubble.bubbleId}`,
+        role: 'assistant',
+        type: 'cursor_thinking',
+        content: [{ type: 'thinking', thinking: bubble.thinking }],
+        timestamp: bubble.createdAt,
+        model: null,
+        input_tokens: 0,
+        output_tokens: 0,
+        duration_ms: null,
+      });
+    }
+
+    const content: MessageContent[] = [];
+    if (bubble.toolName) {
+      const normalizedToolName = normalizeCursorToolName(bubble.toolName);
+      content.push({
+        type: 'tool_use',
+        id: bubble.bubbleId,
+        name: normalizedToolName,
+        input: bubble.toolInput ?? {},
+      });
+
+      if (bubble.toolResult) {
+        content.push({
+          type: 'tool_result',
+          tool_use_id: bubble.bubbleId,
+          tool_name: normalizedToolName,
+          content: bubble.toolResult,
+        });
+      }
+    }
+    if (bubble.text) {
+      content.push({
+        type: 'text',
+        text: bubble.role === 'user' ? unwrapCursorTranscriptUserText(bubble.text) : bubble.text,
+      });
+    }
+    if (bubble.references.length > 0) {
+      content.push({ type: 'references', items: bubble.references });
+    }
+
+    if (content.length === 0) continue;
+
+    messages.push({
+      uuid: `cursor-bubble-${bubble.bubbleId}`,
+      role: bubble.role,
+      type: 'cursor_transcript',
+      content,
+      timestamp: bubble.createdAt,
+      model: null,
+      input_tokens: 0,
+      output_tokens: 0,
+      duration_ms: null,
+    });
+  }
+
+  return messages;
+}
+
+async function parseCursorSession(filePath: string): Promise<ParsedMessage[]> {
+  const state = readCursorWorkspaceState(filePath);
+  if (!state) return [];
+
+  const messages: ParsedMessage[] = [];
+  const composerGenerations = state.generations
+    .filter(entry => typeof entry.unixMs === 'number')
+    .filter(entry => entry.type === 'composer')
+    .slice()
+    .sort((a, b) => (a.unixMs || 0) - (b.unixMs || 0));
+  const activityGenerations = state.generations
+    .filter(entry => entry.type !== 'composer')
+    .slice()
+    .sort((a, b) => (a.unixMs || 0) - (b.unixMs || 0));
+  const usedComposerGenerationIds = new Set<string>();
+  let composerIndex = 0;
+
+  for (const prompt of state.prompts) {
+    const promptText = normalizeMessageText(prompt.text || '');
+    if (!promptText) continue;
+
+    const matchedGeneration = findMatchingComposerGeneration(
+      promptText,
+      composerGenerations,
+      usedComposerGenerationIds,
+      composerIndex,
+    );
+    if (matchedGeneration) {
+      const matchedIndex = composerGenerations.indexOf(matchedGeneration);
+      if (matchedIndex >= 0) composerIndex = matchedIndex + 1;
+      if (matchedGeneration.generationUUID) {
+        usedComposerGenerationIds.add(matchedGeneration.generationUUID);
+      }
+    }
+
+    messages.push({
+      uuid: matchedGeneration?.generationUUID || `cursor-prompt-${messages.length + 1}`,
+      role: 'user',
+      type: 'cursor_prompt',
+      content: [{ type: 'text', text: promptText }],
+      timestamp: typeof matchedGeneration?.unixMs === 'number' ? new Date(matchedGeneration.unixMs).toISOString() : null,
+      model: null,
+      input_tokens: 0,
+      output_tokens: 0,
+      duration_ms: null,
+    });
+  }
+
+  for (const generation of composerGenerations) {
+    if (generation.generationUUID && usedComposerGenerationIds.has(generation.generationUUID)) continue;
+
+    const promptText = normalizeMessageText(generation.textDescription || '');
+    if (!promptText) continue;
+
+    messages.push({
+      uuid: generation.generationUUID || `cursor-composer-${messages.length + 1}`,
+      role: 'user',
+      type: 'cursor_prompt',
+      content: [{ type: 'text', text: promptText }],
+      timestamp: typeof generation.unixMs === 'number' ? new Date(generation.unixMs).toISOString() : null,
+      model: null,
+      input_tokens: 0,
+      output_tokens: 0,
+      duration_ms: null,
+    });
+  }
+
+  for (const generation of activityGenerations) {
+    const description = formatCursorGenerationDescription(generation);
+    if (!description) continue;
+
+    messages.push({
+      uuid: generation.generationUUID || `cursor-activity-${messages.length + 1}`,
+      role: 'assistant',
+      type: 'cursor_generation',
+      content: [{ type: 'text', text: description }],
+      timestamp: typeof generation.unixMs === 'number' ? new Date(generation.unixMs).toISOString() : null,
+      model: null,
+      input_tokens: 0,
+      output_tokens: 0,
+      duration_ms: null,
+    });
+  }
+
+  messages.sort((a, b) => {
+    const left = a.timestamp ? Date.parse(a.timestamp) : 0;
+    const right = b.timestamp ? Date.parse(b.timestamp) : 0;
+    return left - right;
+  });
+
+  const metadataContent = buildCursorMetadataContent(state);
+  if (metadataContent.length > 0) {
+    messages.unshift({
+      uuid: 'cursor-workspace',
+      role: 'assistant',
+      type: 'cursor_workspace',
+      content: metadataContent,
+      timestamp: messages[0]?.timestamp || null,
+      model: null,
+      input_tokens: 0,
+      output_tokens: 0,
+      duration_ms: null,
+    });
   }
 
   return messages;
@@ -737,6 +1013,10 @@ function normalizeTimestamp(value: unknown): string | null {
 }
 
 export async function parseSubagents(sessionFilePath: string): Promise<Map<string, ParsedMessage[]>> {
+  if (path.extname(sessionFilePath).toLowerCase() !== '.jsonl') {
+    return new Map();
+  }
+
   const sessionDir = sessionFilePath.replace('.jsonl', '');
   const subagentsDir = path.join(sessionDir, 'subagents');
   const result = new Map<string, ParsedMessage[]>();
@@ -751,4 +1031,176 @@ export async function parseSubagents(sessionFilePath: string): Promise<Map<strin
   }
 
   return result;
+}
+
+function findMatchingComposerGeneration(
+  promptText: string,
+  generations: CursorGenerationEntry[],
+  usedIds: Set<string>,
+  startIndex: number,
+): CursorGenerationEntry | null {
+  for (let index = startIndex; index < generations.length; index++) {
+    const generation = generations[index];
+    if (generation.generationUUID && usedIds.has(generation.generationUUID)) continue;
+    const description = normalizeMessageText(generation.textDescription || '');
+    if (description === promptText) {
+      return generation;
+    }
+  }
+
+  for (let index = startIndex; index < generations.length; index++) {
+    const generation = generations[index];
+    if (generation.generationUUID && usedIds.has(generation.generationUUID)) continue;
+    return generation;
+  }
+
+  return null;
+}
+
+function buildCursorMetadataContent(state: CursorWorkspaceState): MessageContent[] {
+  const content: MessageContent[] = [];
+  const references: { label?: string; path: string }[] = [];
+
+  if (state.workspacePath) {
+    references.push({ label: 'Workspace', path: state.workspacePath });
+  }
+
+  if (references.length > 0) {
+    content.push({ type: 'references', items: references });
+  }
+
+  const composerSummary = formatCursorComposerSummary(state);
+  if (composerSummary) {
+    content.push({ type: 'text', text: composerSummary });
+  }
+
+  return content;
+}
+
+function buildCursorTranscriptMetadataContent(metadata: CursorComposerMetadata | null): MessageContent[] {
+  if (!metadata) return [];
+
+  const content: MessageContent[] = [];
+  if (metadata.workspacePath) {
+    content.push({
+      type: 'references',
+      items: [{ label: 'Workspace', path: metadata.workspacePath }],
+    });
+  }
+
+  const lines: string[] = [];
+  if (metadata.cachedGitBranch || metadata.activeBranch || metadata.createdOnBranch) {
+    lines.push(`Branch: ${metadata.activeBranch || metadata.cachedGitBranch || metadata.createdOnBranch}`);
+  }
+
+  const title = metadata.name || 'Untitled composer';
+  const subtitle = metadata.subtitle && metadata.subtitle !== title ? metadata.subtitle : null;
+  const meta: string[] = [];
+  if (metadata.unifiedMode) meta.push(metadata.unifiedMode);
+  if (metadata.forceMode && metadata.forceMode !== metadata.unifiedMode) meta.push(metadata.forceMode);
+  if (metadata.createdOnBranch) meta.push(`created on ${metadata.createdOnBranch}`);
+  if (metadata.activeBranch) meta.push(`active ${metadata.activeBranch}`);
+  if (metadata.selected) meta.push('selected');
+  if (metadata.focused) meta.push('focused');
+
+  const header = [title, subtitle ? `: ${subtitle}` : '', meta.length > 0 ? ` (${meta.join(', ')})` : ''].join('');
+  lines.push(header);
+
+  if (lines.length > 0) {
+    content.push({ type: 'text', text: lines.join('\n') });
+  }
+
+  return content;
+}
+
+function formatCursorComposerSummary(state: CursorWorkspaceState): string | null {
+  const lines: string[] = [];
+
+  if (state.cachedGitBranch) {
+    lines.push(`Branch: ${state.cachedGitBranch}`);
+  }
+
+  const composers = state.composers
+    .slice()
+    .sort((a, b) => (a.createdAt || a.lastUpdatedAt || 0) - (b.createdAt || b.lastUpdatedAt || 0));
+
+  if (composers.length > 0) {
+    lines.push(`Cursor composers (${composers.length}):`);
+    for (const composer of composers) {
+      const line = formatCursorComposerLine(composer, state);
+      if (line) lines.push(line);
+    }
+  }
+
+  return lines.length > 0 ? lines.join('\n') : null;
+}
+
+function formatCursorComposerLine(composer: CursorComposerHead, state: CursorWorkspaceState): string | null {
+  const parts: string[] = [];
+  const title = normalizeMessageText(composer.name || '') || 'Untitled composer';
+  parts.push(`- ${title}`);
+
+  const subtitle = normalizeMessageText(composer.subtitle || '');
+  if (subtitle && subtitle !== title) {
+    parts.push(`: ${subtitle}`);
+  }
+
+  const meta: string[] = [];
+  if (composer.unifiedMode) meta.push(composer.unifiedMode);
+  if (composer.forceMode && composer.forceMode !== composer.unifiedMode) meta.push(composer.forceMode);
+  if (composer.createdOnBranch) meta.push(`created on ${composer.createdOnBranch}`);
+  if (composer.activeBranch?.branchName) meta.push(`active ${composer.activeBranch.branchName}`);
+  if (composer.composerId && state.selectedComposerIds.includes(composer.composerId)) meta.push('selected');
+  if (composer.composerId && state.lastFocusedComposerIds.includes(composer.composerId)) meta.push('focused');
+
+  if (meta.length > 0) {
+    parts.push(` (${meta.join(', ')})`);
+  }
+
+  return parts.join('');
+}
+
+function formatCursorGenerationDescription(entry: { type?: string; textDescription?: string }): string | null {
+  const description = normalizeMessageText(entry.textDescription || '');
+  if (!description) return null;
+
+  switch (entry.type) {
+    case 'apply':
+      return `Applied changes to ${description}`;
+    default:
+      return `${capitalize(entry.type || 'activity')}: ${description}`;
+  }
+}
+
+function capitalize(value: string): string {
+  return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
+}
+
+function unwrapCursorTranscriptUserText(text: string): string {
+  const match = text.match(/^<user_query>\s*([\s\S]*?)\s*<\/user_query>$/i);
+  return match?.[1]?.trim() || text;
+}
+
+function isCursorTranscriptPath(filePath: string): boolean {
+  const normalized = filePath.replace(/[\\/]+/g, '/').toLowerCase();
+  return path.extname(filePath).toLowerCase() === '.jsonl'
+    && normalized.includes('/.cursor/projects/')
+    && normalized.includes('/agent-transcripts/');
+}
+
+function normalizeCursorToolName(name: string): string {
+  switch (name) {
+    case 'read_file_v2':
+      return 'Read';
+    case 'glob_file_search':
+      return 'Glob';
+    case 'ripgrep_raw_search':
+      return 'Grep';
+    case 'web_search':
+      return 'WebSearch';
+    case 'semantic_search_full':
+      return 'Search';
+    default:
+      return normalizeToolName(name);
+  }
 }

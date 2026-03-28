@@ -10,7 +10,7 @@ interface Props {
 
 const TOOL_ICONS: Record<string, typeof Wrench> = {
   Read: FileText, Write: FileText, Edit: Pencil, Bash: Terminal,
-  Glob: FolderSearch, Grep: Search, WebFetch: Globe, WebSearch: Globe,
+  Glob: FolderSearch, Grep: Search, Search: Search, WebFetch: Globe, WebSearch: Globe,
   AskUserQuestion: HelpCircle, update_plan: FileText, apply_patch: Pencil,
 };
 
@@ -21,6 +21,7 @@ const TOOL_COLORS: Record<string, string> = {
   Bash: 'text-[#d08050]',
   Glob: 'text-[#48a8b8]',
   Grep: 'text-[#9878b8]',
+  Search: 'text-[#7c8fc0]',
   Task: 'text-[#c878a0]',
   WebFetch: 'text-[#6878c0]',
   WebSearch: 'text-[#48a890]',
@@ -98,11 +99,13 @@ export function ToolUseBlock({ name, input, id }: Props) {
 function hasToolBodyContent(name: string, obj: Record<string, any> | null, fallback: string): boolean {
   switch (name) {
     case 'Read':
-      return Boolean(obj?.offset || obj?.limit);
+      return Boolean(obj?.path || obj?.file_path || obj?.offset || obj?.limit);
     case 'Grep':
       return Boolean(obj?.path || obj?.glob);
     case 'Glob':
       return Boolean(obj?.path);
+    case 'Search':
+      return false;
     case 'WebFetch':
     case 'WebSearch':
       return false;
@@ -120,6 +123,7 @@ function isToolContentCollapsible(name: string, obj: Record<string, any> | null,
     case 'Read':
     case 'Grep':
     case 'Glob':
+    case 'Search':
     case 'WebFetch':
     case 'WebSearch':
       return false;
@@ -150,11 +154,12 @@ function ToolContent({ name, obj, fallback }: { name: string; obj: Record<string
     case 'Edit': return <EditContent filePath={obj.file_path} oldStr={obj.old_string} newStr={obj.new_string} />;
     case 'apply_patch': return <RawBlock text={typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2)} />;
     case 'Bash': return <BashContent command={obj.command} description={obj.description} />;
-    case 'Read': return <ReadContent offset={obj.offset} limit={obj.limit} />;
+    case 'Read': return <ReadContent path={obj.path || obj.file_path} offset={obj.offset} limit={obj.limit} />;
     case 'Grep': return <GrepContent path={obj.path} glob={obj.glob} />;
     case 'Glob': return <GlobContent path={obj.path} />;
+    case 'Search': return <SimpleField label="Query" value={obj.query} />;
     case 'Task': return <TaskContent description={obj.description} prompt={obj.prompt} />;
-    case 'WebSearch': return <SimpleField label="Query" value={obj.query} />;
+    case 'WebSearch': return <SimpleField label="Query" value={obj.query || obj.searchTerm} />;
     case 'WebFetch': return <SimpleField label="URL" value={obj.url} />;
     case 'AskUserQuestion': return <AskUserQuestionContent input={obj} />;
     default: return <RawBlock text={fallback} />;
@@ -247,9 +252,10 @@ function BashContent({ command, description }: { command?: string; description?:
   );
 }
 
-function ReadContent({ offset, limit }: { offset?: number; limit?: number }) {
+function ReadContent({ path, offset, limit }: { path?: string; offset?: number; limit?: number }) {
   return (
     <div className="p-3">
+      {path && <div className="text-xs text-[#9aafa3] mb-1.5">Path: {path}</div>}
       {(offset || limit) && (
         <div className="text-xs text-[#9aafa3]">
           {offset ? `Offset: ${offset}` : ''}{offset && limit ? ' / ' : ''}{limit ? `Limit: ${limit} lines` : ''}
@@ -323,15 +329,16 @@ function getPreview(name: string, input: unknown): string {
   const obj = input as Record<string, any>;
   switch (name) {
     case 'ExitPlanMode': return (decodeEscapedText(obj.sendMessageToUser || '').split('\n')[0] || '').slice(0, 80);
-    case 'Read': return obj.file_path || '';
+    case 'Read': return obj.path || obj.file_path || '';
     case 'Write': return obj.file_path || '';
     case 'Edit': return obj.file_path || '';
     case 'Bash': return '';
     case 'Glob': return obj.pattern || '';
     case 'Grep': return obj.pattern || '';
+    case 'Search': return obj.query || '';
     case 'Task': return obj.description || '';
     case 'WebFetch': return obj.url || '';
-    case 'WebSearch': return obj.query || '';
+    case 'WebSearch': return obj.query || obj.searchTerm || '';
     case 'update_plan': return JSON.stringify(obj).slice(0, 80);
     case 'apply_patch': return 'Patch';
     case 'AskUserQuestion': {

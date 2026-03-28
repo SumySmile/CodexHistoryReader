@@ -5,11 +5,20 @@ import { fileURLToPath } from 'url';
 import {
   CODEX_SESSION_INDEX_PATH,
   CODEX_SESSIONS_DIR,
+  CURSOR_COPILOT_WORKSPACE_STORAGE_DIR,
+  CURSOR_PROJECTS_DIR,
   PROJECTS_DIR,
   VSCODE_COPILOT_WORKSPACE_STORAGE_DIR,
 } from '../config.js';
 import { getDb } from '../db/connection.js';
 import type { CodexSessionIndexEntry } from '../types.js';
+import {
+  buildCursorComposerMetadataIndex,
+  buildCursorComposerVirtualPath,
+  listCursorComposerIdsWithBubbles,
+  readCursorComposerConversation,
+  readCursorWorkspaceState,
+} from './cursor-state.js';
 import { sanitizeConversationText } from './text-normalization.js';
 
 const LOW_SIGNAL_PROMPT_RE = /^(untitled|no prompt|hi|hello|continue|缂備綀鍛暰|ok|濠靛倻鏅▓鎲掗柡鈧捄鍝勭厒)$/i;
@@ -105,13 +114,22 @@ export async function scanAllProjects(): Promise<number> {
       created_at = COALESCE(created_at, @created_at),
       modified_at = COALESCE(@modified_at, modified_at),
       file_path = COALESCE(@file_path, file_path),
-      file_mtime = COALESCE(@file_mtime, file_mtime)
+      file_mtime = COALESCE(@file_mtime, file_mtime),
+      indexed_at = CASE
+        WHEN COALESCE(@file_path, '') <> COALESCE(file_path, '')
+          OR COALESCE(@file_mtime, -1) <> COALESCE(file_mtime, -1)
+          OR COALESCE(@modified_at, '') <> COALESCE(modified_at, '')
+          OR COALESCE(@message_count, 0) <> COALESCE(message_count, 0)
+        THEN NULL
+        ELSE indexed_at
+      END
   `);
 
   let count = 0;
   count += await scanClaudeProjects(upsert);
   count += await scanCodexSessions(upsert);
-  count += await scanCopilotSessions(upsert);
+  count += await scanVsCodeCopilotSessions(upsert);
+  count += await scanCursorCopilotSessions(upsert);
   return count;
 }
 
@@ -246,7 +264,7 @@ async function scanCodexSessions(upsert: any): Promise<number> {
   return count;
 }
 
-async function scanCopilotSessions(upsert: any): Promise<number> {
+async function scanVsCodeCopilotSessions(upsert: any): Promise<number> {
   const db = getDb();
   let count = 0;
 
@@ -297,6 +315,259 @@ async function scanCopilotSessions(upsert: any): Promise<number> {
   }
 
   return count;
+}
+
+async function scanCursorCopilotSessions(upsert: any): Promise<number> {
+  const globalResult = await scanCursorGlobalComposerSessions(upsert);
+  const transcriptResult = await scanCursorTranscriptSessions(upsert, globalResult.composerIdsWithBubbles);
+  const skipWorkspaceIds = new Set<string>([
+    ...globalResult.workspaceIdsWithComposerSessions,
+    ...transcriptResult.workspaceIdsWithTranscripts,
+  ]);
+  return globalResult.count + transcriptResult.count + await scanCursorWorkspaceStateSessions(upsert, skipWorkspaceIds);
+}
+
+async function scanCursorGlobalComposerSessions(upsert: any): Promise<{
+  count: number;
+  composerIdsWithBubbles: Set<string>;
+  workspaceIdsWithComposerSessions: Set<string>;
+}> {
+  const composerMetadataIndex = buildCursorComposerMetadataIndex();
+  const composerIds = listCursorComposerIdsWithBubbles();
+  const countSet = new Set<string>();
+  const workspaceIdsWithComposerSessions = new Set<string>();
+  let count = 0;
+
+  for (const composerId of composerIds) {
+    const metadata = composerMetadataIndex.get(composerId) || null;
+    const conversation = readCursorComposerConversation(composerId);
+    if (conversation.bubbles.length === 0) continue;
+
+    const firstPrompt = conversation.bubbles
+      .find(bubble => bubble.role === 'user' && bubble.text && !isLowSignalPrompt(bubble.text))
+      ?.text || null;
+    const summary = metadata?.name || metadata?.subtitle || null;
+    const createdAt = conversation.bubbles[0]?.createdAt || null;
+    const modifiedAt = conversation.bubbles[conversation.bubbles.length - 1]?.createdAt || null;
+    const messageCount = conversation.bubbles.reduce((sum, bubble) => sum + countCursorBubbleMessages(bubble), 0);
+    const sessionId = `${COPILOT_ID_PREFIX}cursor-${composerId}`;
+
+    if (metadata?.workspaceId) {
+      workspaceIdsWithComposerSessions.add(metadata.workspaceId);
+      getDb().prepare('DELETE FROM sessions WHERE id = ?').run(`${COPILOT_ID_PREFIX}cursor-${metadata.workspaceId}`);
+      getDb().prepare('DELETE FROM sessions WHERE id = ?').run(`${COPILOT_ID_PREFIX}cursor-${metadata.workspaceId}-${composerId}`);
+    }
+
+    upsert.run({
+      id: sessionId,
+      project_slug: slugifyProjectPath(metadata?.workspacePath || composerId, 'copilot-cursor-unknown'),
+      project_path: metadata?.workspacePath || null,
+      summary: summary && summary !== firstPrompt ? summary.slice(0, 500) : null,
+      first_prompt: firstPrompt?.slice(0, 500) || null,
+      message_count: messageCount,
+      git_branch: metadata?.activeBranch || metadata?.cachedGitBranch || metadata?.createdOnBranch || null,
+      model: null,
+      created_at: createdAt,
+      modified_at: modifiedAt,
+      file_path: buildCursorComposerVirtualPath(composerId),
+      file_mtime: null,
+    });
+    countSet.add(composerId);
+    count++;
+  }
+
+  return {
+    count,
+    composerIdsWithBubbles: countSet,
+    workspaceIdsWithComposerSessions,
+  };
+}
+
+async function scanCursorTranscriptSessions(
+  upsert: any,
+  skipComposerIds: Set<string> = new Set<string>(),
+): Promise<{
+  count: number;
+  workspaceIdsWithTranscripts: Set<string>;
+}> {
+  const db = getDb();
+  let count = 0;
+  const workspaceIdsWithTranscripts = new Set<string>();
+
+  if (!fs.existsSync(CURSOR_PROJECTS_DIR)) {
+    return { count, workspaceIdsWithTranscripts };
+  }
+
+  const composerMetadataIndex = buildCursorComposerMetadataIndex();
+  const transcriptFiles = listFiles(CURSOR_PROJECTS_DIR, filePath => {
+    return filePath.endsWith('.jsonl') && filePath.includes(`${path.sep}agent-transcripts${path.sep}`);
+  });
+
+  for (const filePath of transcriptFiles) {
+    try {
+      const stat = fs.statSync(filePath);
+      const composerId = path.basename(filePath, '.jsonl');
+      if (skipComposerIds.has(composerId)) continue;
+      const metadata = composerMetadataIndex.get(composerId) || null;
+      const sessionId = `${COPILOT_ID_PREFIX}cursor-${composerId}`;
+
+      const transcriptMeta = await parseCursorTranscriptMeta(filePath);
+      const conversation = readCursorComposerConversation(composerId);
+      const summary = metadata?.name || metadata?.subtitle || null;
+      const firstPrompt = conversation.bubbles
+        .find(bubble => bubble.role === 'user' && bubble.text && !isLowSignalPrompt(bubble.text))
+        ?.text || transcriptMeta.firstPrompt;
+      const createdAt = conversation.bubbles[0]?.createdAt
+        || (metadata?.createdAt ? new Date(metadata.createdAt).toISOString() : transcriptMeta.createdAt);
+      const modifiedAt = conversation.bubbles[conversation.bubbles.length - 1]?.createdAt
+        || (metadata?.lastUpdatedAt ? new Date(metadata.lastUpdatedAt).toISOString() : transcriptMeta.modifiedAt);
+      const messageCount = conversation.bubbles.length > 0
+        ? conversation.bubbles.reduce((sum, bubble) => sum + countCursorBubbleMessages(bubble), 0)
+        : transcriptMeta.messageCount;
+      const projectDirName = path.basename(path.dirname(path.dirname(filePath)));
+
+      if (metadata?.workspaceId) {
+        workspaceIdsWithTranscripts.add(metadata.workspaceId);
+        db.prepare('DELETE FROM sessions WHERE id = ?').run(`${COPILOT_ID_PREFIX}cursor-${metadata.workspaceId}`);
+        db.prepare('DELETE FROM sessions WHERE id = ?').run(`${COPILOT_ID_PREFIX}cursor-${metadata.workspaceId}-${composerId}`);
+      }
+
+      upsert.run({
+        id: sessionId,
+        project_slug: slugifyProjectPath(metadata?.workspacePath || projectDirName, 'copilot-cursor-unknown'),
+        project_path: metadata?.workspacePath || null,
+        summary: summary && summary !== firstPrompt ? summary.slice(0, 500) : null,
+        first_prompt: firstPrompt?.slice(0, 500) || null,
+        message_count: messageCount,
+        git_branch: metadata?.activeBranch || metadata?.cachedGitBranch || metadata?.createdOnBranch || null,
+        model: null,
+        created_at: createdAt || new Date(stat.mtimeMs).toISOString(),
+        modified_at: modifiedAt || new Date(stat.mtimeMs).toISOString(),
+        file_path: filePath,
+        file_mtime: stat.mtimeMs,
+      });
+      count++;
+    } catch (e) {
+      console.warn('[scanner] Skip Cursor transcript', filePath, ':', (e as Error).message);
+    }
+  }
+
+  return { count, workspaceIdsWithTranscripts };
+}
+
+function countCursorBubbleMessages(
+  bubble: { thinking: string | null; text: string | null; references: { path: string }[]; toolName: string | null; toolResult: string | null }
+): number {
+  const hasMainContent = Boolean(
+    bubble.text
+      || bubble.references.length > 0
+      || bubble.toolName
+      || bubble.toolResult
+  );
+
+  return (bubble.thinking ? 1 : 0) + (hasMainContent ? 1 : 0);
+}
+
+async function scanCursorWorkspaceStateSessions(upsert: any, skipWorkspaceIds: Set<string>): Promise<number> {
+  const db = getDb();
+  let count = 0;
+
+  if (!fs.existsSync(CURSOR_COPILOT_WORKSPACE_STORAGE_DIR)) return 0;
+
+  const workspaceDirs = fs.readdirSync(CURSOR_COPILOT_WORKSPACE_STORAGE_DIR, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => path.join(CURSOR_COPILOT_WORKSPACE_STORAGE_DIR, entry.name));
+
+  for (const workspaceDir of workspaceDirs) {
+    const stateDbPath = path.join(workspaceDir, 'state.vscdb');
+    if (!fs.existsSync(stateDbPath)) continue;
+
+    try {
+      const stat = fs.statSync(stateDbPath);
+      const state = readCursorWorkspaceState(stateDbPath);
+      if (!state || skipWorkspaceIds.has(state.workspaceId)) continue;
+
+      const sessionId = `${COPILOT_ID_PREFIX}cursor-${state.workspaceId}`;
+      const promptTexts = state.prompts
+        .map(prompt => sanitizeConversationText(prompt.text))
+        .filter((value): value is string => Boolean(value));
+      const composerSummary = state.composers
+        .slice()
+        .sort((a, b) => (b.lastUpdatedAt || b.createdAt || 0) - (a.lastUpdatedAt || a.createdAt || 0))
+        .map(composer => sanitizeConversationText(composer.name || composer.subtitle || null))
+        .find((value): value is string => Boolean(value)) || null;
+      const firstPrompt = promptTexts.find(text => !isLowSignalPrompt(text)) || null;
+      const generationTimes = state.generations
+        .map(entry => typeof entry.unixMs === 'number' ? new Date(entry.unixMs).toISOString() : null)
+        .filter((value): value is string => Boolean(value));
+
+      if (promptTexts.length === 0 && generationTimes.length === 0 && !composerSummary) continue;
+
+      upsert.run({
+        id: sessionId,
+        project_slug: slugifyProjectPath(state.workspacePath, 'copilot-cursor-unknown'),
+        project_path: state.workspacePath,
+        summary: composerSummary && composerSummary !== firstPrompt ? composerSummary.slice(0, 500) : null,
+        first_prompt: firstPrompt?.slice(0, 500) || null,
+        message_count: state.prompts.length + state.generations.length,
+        git_branch: state.cachedGitBranch,
+        model: null,
+        created_at: generationTimes[0] || new Date(stat.mtimeMs).toISOString(),
+        modified_at: generationTimes[generationTimes.length - 1] || new Date(stat.mtimeMs).toISOString(),
+        file_path: stateDbPath,
+        file_mtime: stat.mtimeMs,
+      });
+      count++;
+    } catch (e) {
+      console.warn('[scanner] Skip Cursor Copilot session', stateDbPath, ':', (e as Error).message);
+    }
+  }
+
+  return count;
+}
+
+async function parseCursorTranscriptMeta(filePath: string): Promise<{
+  firstPrompt: string | null;
+  createdAt: string | null;
+  modifiedAt: string | null;
+  messageCount: number;
+}> {
+  return new Promise((resolve) => {
+    const result = {
+      firstPrompt: null as string | null,
+      createdAt: null as string | null,
+      modifiedAt: null as string | null,
+      messageCount: 0,
+    };
+
+    const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
+    const rl = readline.createInterface({ input: stream });
+
+    rl.on('line', (line) => {
+      if (!line.trim()) return;
+      try {
+        const obj = JSON.parse(line);
+        const content = Array.isArray(obj?.message?.content) ? obj.message.content : [];
+        const text = sanitizeConversationText(
+          content
+            .filter((block: any) => block?.type === 'text' && typeof block?.text === 'string')
+            .map((block: any) => unwrapCursorTranscriptUserText(block.text))
+            .join('\n\n')
+        );
+
+        if (!text) return;
+        result.messageCount += 1;
+        if (obj?.role === 'user' && !result.firstPrompt && !isLowSignalPrompt(text)) {
+          result.firstPrompt = text;
+        }
+      } catch {
+        // ignore malformed transcript lines
+      }
+    });
+
+    rl.on('close', () => resolve(result));
+    rl.on('error', () => resolve(result));
+  });
 }
 
 function listFiles(root: string, predicate: (filePath: string) => boolean): string[] {
@@ -454,6 +725,11 @@ function normalizeFileUriToPath(value: string | null): string | null {
   }
 
   return value.replace(/\//g, path.sep);
+}
+
+function unwrapCursorTranscriptUserText(text: string): string {
+  const match = text.match(/^<user_query>\s*([\s\S]*?)\s*<\/user_query>$/i);
+  return match?.[1]?.trim() || text;
 }
 
 async function parseClaudeFirstLines(filePath: string): Promise<{

@@ -1,25 +1,28 @@
-# Claude / Codex History Viewer
+# Claude / Codex / Copilot History Viewer
 
-浏览、搜索、管理本机的 AI 编程会话历史。目前已支持：
+浏览、搜索、管理本机 AI 编程会话历史的本地工具。
 
+当前已支持：
 - Claude Code
 - Codex
+- GitHub Copilot Chat（VS Code）
+- Cursor（优先读取 `globalStorage/state.vscdb`，并结合 `agent-transcripts` / `workspaceStorage/state.vscdb` 兜底）
 
-项目最初只支持 Claude，现已扩展为双数据源读取与展示。后续如果要接入更多来源，建议继续沿用“数据源扫描 + 统一解析 + 统一前端展示”的结构。
+项目最初只支持 Claude，现已扩展为多来源统一扫描、统一解析、统一展示。
 
 ## 功能概览
 
 - 会话列表浏览，支持分页、排序、搜索
-- 项目维度筛选、收藏筛选、标签筛选
-- 会话详情查看，支持 Markdown 渲染、代码高亮、Thinking 展示、工具调用展示
-- AskUserQuestion 展示，支持问题、选项、答案、注释信息
+- 来源切换：`All / Claude / Codex / Copilot`
+- 会话详情查看，支持 Markdown、代码高亮、Thinking、工具调用、引用块
+- AskUserQuestion 展示，支持问题、选项、答案、注释
 - 全文搜索
 - 标签管理
 - 收藏切换
 - 标题自定义
 - Markdown / JSON 导出
 - 统计页
-- 本地文件变更监听，新增或变更会话后自动入库
+- 本地文件变化监听，新增或变更会话后自动入库
 
 ## 当前支持的数据来源
 
@@ -31,14 +34,13 @@
 ~/.claude/projects
 ```
 
-主要兼容内容：
-
-- `sessions-index.json` 索引
+兼容内容：
+- `sessions-index.json`
 - 项目目录下的 `.jsonl` 会话文件
 - UUID 会话 ID
-- `agent-xxxxxxx` 形式的会话 ID
+- `agent-*` 形式会话 ID
 - AskUserQuestion 结果回填
-- 子代理 `subagents` 会话解析
+- `subagents` 子代理会话解析
 
 ### 2. Codex
 
@@ -49,8 +51,7 @@
 ~/.codex/session_index.jsonl
 ```
 
-目前兼容两类 Codex 历史格式：
-
+兼容格式：
 - 旧格式
   - `message`
   - `reasoning`
@@ -62,11 +63,61 @@
   - `event_msg`
   - `turn_context`
 
-Codex 会话写入数据库时会统一加前缀，避免与 Claude 的会话 ID 冲突：
+写入数据库时会统一加前缀，避免与其他来源冲突：
 
 ```text
 codex-<raw-session-id>
 ```
+
+### 3. GitHub Copilot Chat（VS Code）
+
+默认扫描目录：
+
+```text
+%APPDATA%/Code/User/workspaceStorage/*/chatSessions/*.json
+```
+
+当前能力：
+- 解析用户请求与助手回复
+- 回退工作区路径
+- 统一归类为 `Copilot`
+- 宿主标签显示为 `Code`
+
+会话 ID 形式：
+
+```text
+copilot-code-<raw-session-id>
+```
+
+### 4. Cursor
+
+Cursor 不是按“每会话一个 JSON 文件”存储，而是分散在 SQLite 和 Cursor 自有目录中。
+
+当前读取优先级：
+
+1. `Cursor/User/globalStorage/state.vscdb::composer:<id>`
+2. `~/.cursor/projects/*/agent-transcripts/*.jsonl`
+3. `Cursor/User/workspaceStorage/*/state.vscdb`
+
+当前能力：
+- 优先解析全局 composer 级会话
+- 读取用户消息、助手正文、thinking、时间戳
+- 读取工具调用与工具结果
+- 提取工作区、文件引用
+- transcript 与 workspace 状态作为兜底来源
+- 统一归类为 `Copilot`
+- 宿主标签显示为 `Cursor`
+
+会话 ID 形式：
+
+```text
+copilot-cursor-<composer-id>
+copilot-cursor-<workspace-id>
+```
+
+说明：
+- 当前版本优先保证“内容尽量完整”
+- Cursor 的一些专有结构仍然是原始结果块展示，后续可再做结构化 UI
 
 ## 技术结构
 
@@ -95,14 +146,13 @@ codex-<raw-session-id>
 ```
 
 说明：
-
-- 当前数据库统一落在 `~/.claude` 下
-- Claude 与 Codex 的会话索引都写入这一个 SQLite 库
-- 统计缓存默认也在 `~/.claude/stats-cache.json`
+- 当前统一写入一个 SQLite 数据库
+- Claude / Codex / Copilot / Cursor 会话索引都在这里
+- 统计缓存默认在 `~/.claude/stats-cache.json`
 
 ## 启动方式
 
-### 方式 1：命令行启动
+### 方式 1：命令行
 
 安装依赖：
 
@@ -116,25 +166,25 @@ npm install
 npm run dev
 ```
 
-仅启动后端：
+仅后端：
 
 ```bash
 npm run dev:server
 ```
 
-仅启动前端：
+仅前端：
 
 ```bash
 npm run dev:client
 ```
 
-生产构建：
+构建：
 
 ```bash
 npm run build
 ```
 
-预览构建产物：
+预览：
 
 ```bash
 npm run preview
@@ -144,89 +194,80 @@ npm run preview
 
 适合 Windows 本地直接启动。
 
-`start.bat` 当前行为：
-
-- 不依赖绝对路径，始终基于脚本自身目录启动
+当前行为：
+- 不依赖绝对路径
+- 基于脚本所在目录启动
 - 自动检查 `package.json`
-- 自动检查 `npm` 是否可用
-- 首次启动如果缺少 `node_modules`，会先执行 `npm install`
-- 自动寻找可用的前端端口，默认从 `5173` 开始递增
-- 在单独的 `cmd` 窗口中启动开发服务
-- 等待服务拉起后自动打开浏览器
-- 浏览器打开的是实际使用的端口，而不是写死的 `5173`
+- 自动检查 `npm`
+- 首次缺少 `node_modules` 时自动执行 `npm install`
+- 自动寻找可用前端端口
+- 启动后自动打开浏览器
+- 打开的地址与实际前端端口保持一致
 
 默认端口：
 
 | 服务 | 端口 | 说明 |
 |------|------|------|
-| 前端 Vite | `5173` 起 | 若被占用会自动递增 |
+| 前端 Vite | `5173` 起 | 被占用时自动递增 |
 | 后端 Express | `3847` | API 服务 |
 
 ## 启动后的后台流程
 
-服务启动后，后端会按顺序执行：
+服务启动后，后端会依次执行：
 
 1. 初始化 SQLite 数据库
-2. 规范化历史 `summary` / `first_prompt`
-3. 为缺失标题的旧会话回填标题
-4. 扫描 Claude 与 Codex 目录并写入会话索引
+2. 规范化已有 `summary` / `first_prompt`
+3. 回填缺失标题
+4. 扫描 Claude / Codex / Copilot / Cursor
 5. 启动文件监听
-6. 延迟执行全文索引构建
+6. 后台构建全文索引
 
 这意味着：
+- 页面会先可用，再逐步补全索引和统计
+- 第一次扫描较多历史时，搜索结果会稍后完整
 
-- 页面先可用，再逐步补全索引与统计
-- 第一次扫描较多历史时，首页数量和搜索结果会逐步完整
-
-## 前端页面
+## 前端展示说明
 
 ### 首页
 
 支持：
-
 - 搜索
+- 来源切换
 - 项目筛选
 - 模型筛选
 - Token 区间筛选
 - 排序
 - 收藏筛选
 
-当前列表已能同时展示 Claude 与 Codex 会话。下一步建议增加更明确的“来源切换”和来源徽标。
+会话卡片与详情页都会显示来源徽标。
+对于 Copilot，还会额外显示宿主标签：
+- `Code`
+- `Cursor`
 
 ### 会话详情页
 
 支持：
-
 - Markdown 渲染
 - 代码块高亮
-- 代码复制
-- Thinking 区块展示
+- Thinking 展示
 - 工具调用展示
 - AskUserQuestion 卡片展示
+- 引用块展示
 - 收藏切换
 - 标题编辑
 - 导出 Markdown / JSON
 
-### 搜索页
-
-支持全文搜索会话内容，并回显命中的片段。
-
-### 统计页
-
-支持查看：
-
-- 总会话数
-- 收藏数
-- 标签数
-- 总消息数
-- 模型分布
-- 项目分布
-- 最近活跃情况
+当前 Cursor 详情页已支持：
+- 用户消息
+- 助手消息
+- thinking
+- 工具调用
+- 工具结果
+- 工作区 / 文件引用
 
 ## 后端 API
 
 主要接口：
-
 - `GET /api/sessions`
 - `GET /api/sessions/:id/messages`
 - `PATCH|POST|PUT /api/sessions/:id/title`
@@ -244,68 +285,69 @@ npm run preview
 - `GET /api/indexing-status`
 - `GET /api/events`
 
-## 兼容性修复记录
+## 最近完成的兼容性修复
 
-本次迁移后，已补上的关键兼容修复包括：
-
-- `start.bat` 去绝对路径，支持任意盘符、任意目录启动
+- `start.bat` 去绝对路径，支持任意目录启动
 - 首次启动自动 `npm install`
-- 前端端口不再写死为 `5173`
-- 修复部分 Windows 环境下 `cmd /k` 引号解析问题
-- 修复 `agent-xxxxxxx` Claude 会话被误判为非法 ID 的问题
-- 修复代码块被渲染成 `[object Object]` 的问题
-- 新增 Codex 历史会话扫描与解析
-- 新增新版 Codex `session_meta` / `response_item` 格式兼容
+- 前端端口不再写死 `5173`
+- 修复部分 Windows 下 `cmd /k` 路径解析问题
+- 修复 Claude `agent-*` 会话被误判为非法 ID
+- 修复代码块被渲染成 `[object Object]`
+- 新增 Codex 新旧格式兼容
+- 新增 VS Code Copilot 会话支持
+- 新增 Cursor 会话支持
+- Cursor 现已支持工具调用 / 工具结果进入消息流
+- 全文索引已纳入工具输入、工具结果、引用路径
 
-## 已知现状
+## 当前已知现状
 
-- 当前首页虽然已能同时展示 Claude 和 Codex，但来源区分还不够明显
-- 目前前端还没有独立的“Claude / Codex”切换入口
-- Codex 的展示已可用，但还可以继续做更细的来源化 UI
-- 统计与模型名展示仍偏 Claude 风格，后续建议按来源分层处理
+- Cursor 已能读到较完整正文，但部分工具结果仍以原始文本块显示
+- Cursor 的更多专有结构还可以继续细化展示
+- Copilot / Cursor 的模型字段不一定稳定存在，因此前端展示对模型做了宽松处理
+- 某些旧历史数据本身编码异常时，原始文本可能仍会包含异常字符
 
 ## 排障
 
-### 1. 双击 `start.bat` 后页面打不开
+### 1. 双击 `start.bat` 后打不开
 
 优先检查：
-
-- 是否安装了 Node.js
+- 是否已安装 Node.js
 - `npm` 是否已加入 PATH
 - 首次 `npm install` 是否成功
-- 黑窗里是否有端口占用或依赖报错
+- 黑窗里是否有端口占用或依赖错误
 
 ### 2. 页面显示 `Invalid session ID`
 
-旧版本后端只接受 UUID。当前版本已兼容：
-
+当前版本已兼容：
 - Claude UUID
 - Claude `agent-*`
 - Codex `codex-*`
+- Copilot `copilot-*`
 
-如果还看到这个错误，通常是后端进程还没重启。
+如果仍出现，通常是后端进程还没重启。
 
-### 3. 会话内容显示 `[object Object]`
-
-这是旧版代码块渲染逻辑和新环境依赖行为不兼容导致的。当前版本已修复。
-
-### 4. Codex 会话没有出现在列表
+### 3. Copilot / Cursor 会话没出现
 
 优先检查：
+- 对应目录是否存在
+- 是否已重启后端触发重新扫描
+- Cursor 当前会话是否真的落到了本地存储
 
-- `~/.codex/sessions` 是否存在
-- 是否已经重启后端触发重新扫描
-- 是否是新格式 Codex 会话文件
-- 是否被最近大量 Claude 会话挤到后面的分页中
+### 4. 搜索搜不到最新会话内容
 
-## 开发建议
+优先检查：
+- 后端是否完成本轮扫描
+- 索引是否已完成构建
+- 新改动后的服务是否已重启
 
-如果后续继续扩展到更多来源，建议优先做这几件事：
+## 后续开发建议
 
-- 在后端返回统一的 `source` 字段，而不是长期依赖会话 ID 前缀判断
-- 首页增加 `全部 / Claude / Codex` 来源切换
-- 卡片与详情页增加来源徽标
-- 模型筛选按来源收敛，避免不同来源模型混在同一个下拉框里
+如果继续扩展，建议优先做：
+
+- 把 Cursor 常见工具结果做结构化展示
+- 把 Cursor 的更多元数据块做更贴近原生的 UI
+- 继续增强来源维度统计
+- 将扫描器与解析器按来源进一步模块化
 
 ## License
 

@@ -110,7 +110,7 @@ function ContentBlock({ block, role }: { block: MessageContent; role: Message['r
           <div className="text-xs text-[#9aafa3] mb-1">
             {block.is_error ? 'Error' : 'Result'}
           </div>
-          <pre className="whitespace-pre-wrap break-all overflow-hidden max-h-96 overflow-y-auto">
+          <pre className="whitespace-pre-wrap break-all overflow-hidden max-h-56 overflow-y-auto">
             {(block.content || '').slice(0, 8000)}
           </pre>
         </div>
