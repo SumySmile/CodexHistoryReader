@@ -47,8 +47,10 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 export interface Session {
   id: string;
-  source: 'claude' | 'codex';
+  source: 'claude' | 'codex' | 'copilot';
   source_label: string;
+  host?: 'code' | 'cursor' | null;
+  host_label?: string | null;
   project_slug: string;
   project_path: string | null;
   summary: string | null;
@@ -68,7 +70,7 @@ export interface Session {
 
 export interface PaginatedSessions {
   sessions: Session[];
-  sourceCounts: { all: number; claude: number; codex: number };
+  sourceCounts: { all: number; claude: number; codex: number; copilot: number };
   pagination: { page: number; limit: number; total: number; totalPages: number };
 }
 
@@ -110,6 +112,7 @@ export type MessageContent =
   | { type: 'thinking'; thinking: string; summary?: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | ToolResultContent
+  | { type: 'references'; items: { label?: string; path: string }[] }
   | { type: 'image'; source: unknown }
   | { type: 'error'; error: string };
 
@@ -242,7 +245,7 @@ export const getProjects = () => fetchJson<Project[]>('/projects');
 export const getStats = () => fetchJson<StatsData>('/stats');
 
 // Models
-export const getModels = (source?: 'claude' | 'codex') => {
+export const getModels = (source?: 'claude' | 'codex' | 'copilot') => {
   const qs = new URLSearchParams(source ? { source } : {}).toString();
   return fetchJson<{ model: string; count: number }[]>(`/models${qs ? `?${qs}` : ''}`);
 };

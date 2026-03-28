@@ -21,7 +21,7 @@ interface Filters {
 interface Props {
   filters: Filters;
   onChange: (filters: Filters) => void;
-  sourceCounts?: { all: number; claude: number; codex: number };
+  sourceCounts?: { all: number; claude: number; codex: number; copilot: number };
 }
 
 const TOKEN_RANGES = [
@@ -50,7 +50,7 @@ export function FilterBar({ filters, onChange, sourceCounts }: Props) {
   }, []);
 
   useEffect(() => {
-    const source = filters.source === 'claude' || filters.source === 'codex'
+    const source = filters.source === 'claude' || filters.source === 'codex' || filters.source === 'copilot'
       ? filters.source as SessionSource
       : undefined;
     getModels(source).then(nextModels => {
@@ -80,6 +80,7 @@ export function FilterBar({ filters, onChange, sourceCounts }: Props) {
     { label: 'All', count: sourceCounts?.all ?? 0 },
     { value: 'claude', label: 'Claude', count: sourceCounts?.claude ?? 0 },
     { value: 'codex', label: 'Codex', count: sourceCounts?.codex ?? 0 },
+    { value: 'copilot', label: 'Copilot', count: sourceCounts?.copilot ?? 0 },
   ];
 
   return (

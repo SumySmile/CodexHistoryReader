@@ -1,7 +1,12 @@
 import chokidar from 'chokidar';
 import path from 'path';
 import fs from 'fs';
-import { CODEX_SESSION_INDEX_PATH, CODEX_SESSIONS_DIR, PROJECTS_DIR } from '../config.js';
+import {
+  CODEX_SESSION_INDEX_PATH,
+  CODEX_SESSIONS_DIR,
+  PROJECTS_DIR,
+  VSCODE_COPILOT_WORKSPACE_STORAGE_DIR,
+} from '../config.js';
 import { scanAllProjects } from './scanner.js';
 import { reindexSession } from './indexer.js';
 import { getDb } from '../db/connection.js';
@@ -20,7 +25,12 @@ function notifyListeners(type: string, sessionId?: string): void {
 }
 
 export function startWatcher(): void {
-  const watchTargets = [PROJECTS_DIR, CODEX_SESSIONS_DIR, CODEX_SESSION_INDEX_PATH]
+  const watchTargets = [
+    PROJECTS_DIR,
+    CODEX_SESSIONS_DIR,
+    CODEX_SESSION_INDEX_PATH,
+    VSCODE_COPILOT_WORKSPACE_STORAGE_DIR,
+  ]
     .filter(target => fs.existsSync(target));
 
   if (watchTargets.length === 0) {
@@ -44,14 +54,16 @@ export function startWatcher(): void {
 async function handleFileChange(filePath: string, event: string): Promise<void> {
   const basename = path.basename(filePath);
 
-  if (basename === 'sessions-index.json' || basename === 'session_index.jsonl') {
+  if (basename === 'sessions-index.json' || basename === 'session_index.jsonl' || basename === 'workspace.json') {
     console.log(`[watcher] Index changed: ${filePath}`);
     await scanAllProjects();
     notifyListeners('scan-complete');
     return;
   }
 
-  if (basename.endsWith('.jsonl')) {
+  const isCopilotSession = basename.endsWith('.json') && filePath.includes(`${path.sep}chatSessions${path.sep}`);
+
+  if (basename.endsWith('.jsonl') || isCopilotSession) {
     console.log(`[watcher] Session ${event}: ${filePath}`);
     const db = getDb();
 

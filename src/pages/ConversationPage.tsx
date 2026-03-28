@@ -9,6 +9,7 @@ import { formatDate, formatTokens, sessionTitle, formatModelName } from '../lib/
 import { toggleFavorite, exportSession, updateSessionTitle, getLocalCustomTitle } from '../lib/api';
 import { useState, useEffect, useCallback } from 'react';
 import { SourceBadge } from '../components/shared/SourceBadge';
+import { HostBadge } from '../components/shared/HostBadge';
 
 export function ConversationPage() {
   const { id } = useParams<{ id: string }>();
@@ -158,6 +159,7 @@ export function ConversationPage() {
                   {displayTitle}
                 </h1>
                 <SourceBadge source={session.source} />
+                <HostBadge host={session.host} />
                 {(session.custom_title || localCustomTitle) && (
                   <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-[#e8f0eb] text-[#6b8578] shrink-0">
                     <Pencil size={10} />
@@ -182,7 +184,13 @@ export function ConversationPage() {
                 <MessageSquare size={12} /> {messages.length} messages
               </span>
               {session.model && (
-                <span className={session.source === 'codex' ? 'text-[#b96d1f] font-medium' : 'text-[#4da87a] font-medium'}>
+                <span className={
+                  session.source === 'codex'
+                    ? 'text-[#b96d1f] font-medium'
+                    : session.source === 'copilot'
+                      ? 'text-[#5a67d8] font-medium'
+                      : 'text-[#4da87a] font-medium'
+                }>
                   {formatModelName(session.model, session.source)}
                 </span>
               )}

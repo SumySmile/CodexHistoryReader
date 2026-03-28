@@ -1,6 +1,6 @@
 import { formatDistanceToNow, format } from 'date-fns';
 
-export type SessionSource = 'claude' | 'codex';
+export type SessionSource = 'claude' | 'codex' | 'copilot';
 
 export function timeAgo(dateStr: string | null): string {
   if (!dateStr) return '';
@@ -44,7 +44,14 @@ export function sessionTitle(summary: string | null, firstPrompt: string | null,
 }
 
 export function sourceLabel(source: SessionSource): string {
-  return source === 'codex' ? 'Codex' : 'Claude';
+  switch (source) {
+    case 'codex':
+      return 'Codex';
+    case 'copilot':
+      return 'Copilot';
+    default:
+      return 'Claude';
+  }
 }
 
 export function formatModelName(model: string | null, source?: SessionSource): string {

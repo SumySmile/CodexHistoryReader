@@ -1,4 +1,4 @@
-import { Bot, Code2 } from 'lucide-react';
+import { Bot, Code2, Github } from 'lucide-react';
 import type { SessionSource } from '../../lib/utils';
 import { cn, sourceLabel } from '../../lib/utils';
 
@@ -10,11 +10,13 @@ interface Props {
 const sourceStyles: Record<SessionSource, string> = {
   claude: 'bg-[#e8f6ef] text-[#2d8a62] border-[#bfe3ce]',
   codex: 'bg-[#fff3e8] text-[#b96d1f] border-[#f0cfaa]',
+  copilot: 'bg-[#eef2ff] text-[#5a67d8] border-[#cfd7ff]',
 };
 
 const sourceIcons: Record<SessionSource, typeof Bot> = {
   claude: Bot,
   codex: Code2,
+  copilot: Github,
 };
 
 export function SourceBadge({ source, compact = false }: Props) {

@@ -23,6 +23,8 @@ export function HomePage() {
   const { data, loading, error, page, setPage, toggleFavorite } = useConversations(filters);
   const scopeLabel = filters.source === 'codex'
     ? 'Codex'
+    : filters.source === 'copilot'
+      ? 'Copilot'
     : filters.source === 'claude'
       ? 'Claude'
       : 'All';

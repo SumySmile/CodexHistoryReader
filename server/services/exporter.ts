@@ -35,6 +35,8 @@ function exportAsMarkdown(session: any, messages: ParsedMessage[]): string {
       for (const block of msg.content) {
         if (block.type === 'text') {
           lines.push(block.text);
+        } else if (block.type === 'references') {
+          lines.push(...formatReferencesBlock(block.items));
         } else if (block.type === 'tool_result') {
           if (block.tool_name === 'AskUserQuestion') {
             lines.push(...formatAskUserQuestionResult(block));
@@ -56,6 +58,8 @@ function exportAsMarkdown(session: any, messages: ParsedMessage[]): string {
       for (const block of msg.content) {
         if (block.type === 'text') {
           lines.push(block.text);
+        } else if (block.type === 'references') {
+          lines.push(...formatReferencesBlock(block.items));
         } else if (block.type === 'thinking') {
           lines.push('<details><summary>💭 Thinking</summary>');
           lines.push('');
@@ -106,6 +110,19 @@ function formatAskUserQuestionResult(block: ToolResultContent): string[] {
     lines.push(block.content.slice(0, 5000));
     lines.push('');
   }
+
+  return lines;
+}
+
+function formatReferencesBlock(items: { label?: string; path: string }[]): string[] {
+  const lines: string[] = [];
+  if (items.length === 0) return lines;
+
+  lines.push('**References**');
+  for (const item of items) {
+    lines.push(`- ${item.label ? `${item.label}: ` : ''}\`${item.path}\``);
+  }
+  lines.push('');
 
   return lines;
 }

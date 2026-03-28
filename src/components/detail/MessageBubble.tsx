@@ -115,6 +115,8 @@ function ContentBlock({ block, role }: { block: MessageContent; role: Message['r
           </pre>
         </div>
       );
+    case 'references':
+      return <ReferencesBlock items={block.items} />;
     case 'image':
       return (
         <div className="text-sm text-[#9aafa3] italic">[Image attachment]</div>
@@ -122,6 +124,26 @@ function ContentBlock({ block, role }: { block: MessageContent; role: Message['r
     default:
       return null;
   }
+}
+
+function ReferencesBlock({ items }: { items: { label?: string; path: string }[] }) {
+  if (!items.length) return null;
+
+  return (
+    <div className="rounded-lg border border-[#d7e2dd] bg-[#f7faf8] px-3 py-2">
+      <div className="text-xs font-medium uppercase tracking-wide text-[#8aa194] mb-2">References</div>
+      <div className="space-y-1.5">
+        {items.map((item, index) => (
+          <div key={`${item.label || 'ref'}-${item.path}-${index}`} className="text-sm text-[#3d5248] break-all">
+            {item.label && <span className="text-[#8aa194] mr-2">{item.label}</span>}
+            <code className="rounded bg-white px-1.5 py-0.5 text-[13px] text-[#4c5f56] border border-[#e1eae5]">
+              {item.path}
+            </code>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function UserAnswerBlock({ content, toolUseResult }: { content: string; toolUseResult?: ToolUseResultData }) {

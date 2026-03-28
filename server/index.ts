@@ -57,8 +57,12 @@ app.get('/api/models', (_req, res) => {
   const params: string[] = [];
   let whereClause = 'model IS NOT NULL';
 
-  if (source === 'claude' || source === 'codex') {
-    whereClause += ` AND CASE WHEN id LIKE 'codex-%' THEN 'codex' ELSE 'claude' END = ?`;
+  if (source === 'claude' || source === 'codex' || source === 'copilot') {
+    whereClause += ` AND CASE
+      WHEN id LIKE 'codex-%' THEN 'codex'
+      WHEN id LIKE 'copilot-%' THEN 'copilot'
+      ELSE 'claude'
+    END = ?`;
     params.push(source);
   }
 

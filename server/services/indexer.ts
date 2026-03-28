@@ -1,7 +1,5 @@
-import fs from 'fs';
-import readline from 'readline';
 import { getDb } from '../db/connection.js';
-import { PROJECTS_DIR } from '../config.js';
+import { parseSession } from './parser.js';
 
 let isIndexing = false;
 
@@ -49,38 +47,20 @@ async function indexSession(
   filePath: string,
   insertStmt: any
 ): Promise<void> {
-  if (!fs.existsSync(filePath)) return;
+  const messages = await parseSession(filePath);
+  for (const message of messages) {
+    const content = message.content
+      .flatMap((block) => {
+        if (block.type === 'text') return [block.text];
+        if (block.type === 'thinking') return [block.thinking];
+        if (block.type === 'references') return block.items.map(item => item.path);
+        return [];
+      })
+      .filter(Boolean)
+      .join(' ');
 
-  const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
-  const rl = readline.createInterface({ input: stream });
-
-  let lineNum = 0;
-  for await (const line of rl) {
-    lineNum++;
-    if (!line.trim()) continue;
-    try {
-      const obj = JSON.parse(line);
-      if (obj.type === 'user') {
-        const content = obj.message?.content;
-        const text = typeof content === 'string' ? content
-          : Array.isArray(content)
-            ? content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join(' ')
-            : '';
-        if (text.trim()) {
-          insertStmt.run(sessionId, obj.uuid, 'user', text.slice(0, 50000), obj.timestamp);
-        }
-      } else if (obj.type === 'assistant') {
-        const blocks = obj.message?.content || [];
-        const texts = blocks
-          .filter((b: any) => b.type === 'text')
-          .map((b: any) => b.text)
-          .join(' ');
-        if (texts.trim()) {
-          insertStmt.run(sessionId, obj.uuid, 'assistant', texts.slice(0, 50000), obj.timestamp);
-        }
-      }
-    } catch (e) {
-      console.debug('[indexer] Skip line', lineNum, ':', (e as Error).message);
+    if (content.trim()) {
+      insertStmt.run(sessionId, message.uuid, message.role, content.slice(0, 50000), message.timestamp);
     }
   }
 }

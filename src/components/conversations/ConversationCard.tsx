@@ -4,6 +4,7 @@ import { Session, getLocalCustomTitle } from '../../lib/api';
 import { timeAgo, truncate, cn, formatTokens, sessionTitle, formatModelName } from '../../lib/utils';
 import { TagBadge } from '../tags/TagBadge';
 import { SourceBadge } from '../shared/SourceBadge';
+import { HostBadge } from '../shared/HostBadge';
 
 interface Props {
   session: Session;
@@ -33,6 +34,7 @@ export function ConversationCard({ session, onToggleFavorite, onSelectProject }:
               {sessionTitle(effectiveSummary, session.first_prompt)}
             </h3>
             <SourceBadge source={session.source} compact />
+            <HostBadge host={session.host} compact />
             {(session.custom_title || localCustomTitle) && (
               <span
                 className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-[#e8f0eb] text-[#6b8578] shrink-0"
@@ -62,7 +64,11 @@ export function ConversationCard({ session, onToggleFavorite, onSelectProject }:
             {session.model && (
               <span className={cn(
                 'font-medium',
-                session.source === 'codex' ? 'text-[#b96d1f]' : 'text-[#4da87a]',
+                session.source === 'codex'
+                  ? 'text-[#b96d1f]'
+                  : session.source === 'copilot'
+                    ? 'text-[#5a67d8]'
+                    : 'text-[#4da87a]',
               )}>
                 {formatModelName(session.model, session.source)}
               </span>

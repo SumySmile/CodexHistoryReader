@@ -60,6 +60,11 @@ export interface ToolUseAnnotation {
   notes?: string;
 }
 
+export interface ReferenceContentItem {
+  label?: string;
+  path: string;
+}
+
 export interface ToolUseResultData {
   questions: ToolUseQuestion[];
   answers: Record<string, ToolUseAnswerValue>;
@@ -80,6 +85,7 @@ export type MessageContent =
   | { type: 'thinking'; thinking: string; summary?: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | ToolResultContent
+  | { type: 'references'; items: ReferenceContentItem[] }
   | { type: 'image'; source: unknown }
   | { type: 'error'; error: string };
 

@@ -14,6 +14,10 @@ import { normalizeMessageText } from './text-normalization.js';
 export async function parseSession(filePath: string): Promise<ParsedMessage[]> {
   if (!fs.existsSync(filePath)) return [];
 
+  if (path.extname(filePath).toLowerCase() === '.json') {
+    return parseCopilotSession(filePath);
+  }
+
   const messages: ParsedMessage[] = [];
   const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
   const rl = readline.createInterface({ input: stream });
@@ -116,6 +120,49 @@ export async function parseSession(filePath: string): Promise<ParsedMessage[]> {
   return messages;
 }
 
+async function parseCopilotSession(filePath: string): Promise<ParsedMessage[]> {
+  const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Record<string, any>;
+  const requests = Array.isArray(raw.requests) ? raw.requests : [];
+  const messages: ParsedMessage[] = [];
+  let syntheticCounter = 0;
+  const nextSyntheticId = (prefix: string) => `${prefix}-${++syntheticCounter}`;
+
+  for (const request of requests) {
+    const timestamp = normalizeTimestamp(request?.timestamp);
+    const userContent = buildCopilotUserContent(request);
+    if (userContent.length > 0) {
+      messages.push({
+        uuid: typeof request?.requestId === 'string' && request.requestId ? request.requestId : nextSyntheticId('copilot-user'),
+        role: 'user',
+        type: 'copilot_request',
+        content: userContent,
+        timestamp,
+        model: null,
+        input_tokens: 0,
+        output_tokens: 0,
+        duration_ms: null,
+      });
+    }
+
+    const assistantContent = buildCopilotAssistantContent(request);
+    if (assistantContent.length > 0) {
+      messages.push({
+        uuid: typeof request?.responseId === 'string' && request.responseId ? request.responseId : nextSyntheticId('copilot-assistant'),
+        role: 'assistant',
+        type: 'copilot_response',
+        content: assistantContent,
+        timestamp,
+        model: null,
+        input_tokens: 0,
+        output_tokens: 0,
+        duration_ms: null,
+      });
+    }
+  }
+
+  return messages;
+}
+
 function parseClaudeUserMessage(obj: any, toolUseNames?: Map<string, string>): ParsedMessage | null {
   const content = obj.message?.content;
   if (!content) return null;
@@ -167,6 +214,36 @@ function parseClaudeUserMessage(obj: any, toolUseNames?: Map<string, string>): P
     output_tokens: 0,
     duration_ms: null,
   };
+}
+
+function buildCopilotUserContent(request: any): MessageContent[] {
+  const content: MessageContent[] = [];
+  const text = extractCopilotMessageText(request?.message);
+  if (text) {
+    content.push({ type: 'text', text });
+  }
+
+  const references = collectCopilotReferencesFromRequest(request);
+  if (references.length > 0) {
+    content.push({ type: 'references', items: references });
+  }
+
+  return content;
+}
+
+function buildCopilotAssistantContent(request: any): MessageContent[] {
+  const content: MessageContent[] = [];
+  const text = extractCopilotResponseText(request?.response);
+  if (text) {
+    content.push({ type: 'text', text });
+  }
+
+  const references = collectCopilotReferencesFromResponse(request);
+  if (references.length > 0) {
+    content.push({ type: 'references', items: references });
+  }
+
+  return content;
 }
 
 function parseClaudeAssistantMessage(obj: any): ParsedMessage | null {
@@ -541,6 +618,122 @@ function normalizeToolName(name: string): string {
     default:
       return name;
   }
+}
+
+function extractCopilotMessageText(message: any): string | null {
+  if (!message) return null;
+  if (typeof message.text === 'string') {
+    return normalizeMessageText(message.text);
+  }
+  if (Array.isArray(message.parts)) {
+    const joined = message.parts
+      .map((part: any) => typeof part?.text === 'string' ? part.text : '')
+      .filter(Boolean)
+      .join('\n');
+    return normalizeMessageText(joined);
+  }
+  return null;
+}
+
+function extractCopilotResponseText(response: any): string | null {
+  if (!Array.isArray(response)) return null;
+  const joined = response
+    .map((item: any) => typeof item?.value === 'string' ? item.value : '')
+    .filter(Boolean)
+    .join('\n\n');
+  return normalizeMessageText(joined);
+}
+
+function collectCopilotReferencesFromRequest(request: any): { label?: string; path: string }[] {
+  const refs: { label?: string; path: string }[] = [];
+
+  if (Array.isArray(request?.variableData?.variables)) {
+    for (const variable of request.variableData.variables) {
+      const fsPath = typeof variable?.value?.fsPath === 'string' ? variable.value.fsPath : null;
+      if (!fsPath) continue;
+      refs.push({
+        ...(typeof variable?.name === 'string' && variable.name.trim() ? { label: variable.name } : {}),
+        path: fsPath,
+      });
+    }
+  }
+
+  return dedupeReferences(refs);
+}
+
+function collectCopilotReferencesFromResponse(request: any): { label?: string; path: string }[] {
+  if (!Array.isArray(request?.response)) return [];
+
+  const refs = request.response.flatMap((item: any) => {
+    const candidates: { label?: string; path: string }[] = [];
+    const basePath = normalizeBaseUriPath(item?.baseUri);
+    if (basePath) {
+      candidates.push({ label: 'Workspace', path: basePath });
+    }
+    return candidates;
+  });
+
+  return dedupeReferences(refs);
+}
+
+function dedupeReferences(items: { label?: string; path: string }[]): { label?: string; path: string }[] {
+  const seen = new Set<string>();
+  const results: { label?: string; path: string }[] = [];
+
+  for (const item of items) {
+    const key = `${item.label || ''}::${item.path}`;
+    if (!item.path || seen.has(key)) continue;
+    seen.add(key);
+    results.push(item);
+  }
+
+  return results;
+}
+
+function normalizeBaseUriPath(baseUri: any): string | null {
+  if (!baseUri) return null;
+  if (typeof baseUri.fsPath === 'string' && baseUri.fsPath.trim()) {
+    return baseUri.fsPath;
+  }
+  if (typeof baseUri.scheme === 'string' && baseUri.scheme === 'file' && typeof baseUri.path === 'string') {
+    return normalizeFileUriToPath(`file://${baseUri.path}`);
+  }
+  if (typeof baseUri.path === 'string' && baseUri.path.trim()) {
+    return normalizeFileUriToPath(baseUri.path);
+  }
+  return null;
+}
+
+function normalizeFileUriToPath(value: string): string {
+  if (/^file:\/\//i.test(value)) {
+    try {
+      const url = new URL(value);
+      const pathname = decodeURIComponent(url.pathname);
+      if (/^\/[A-Za-z]:\//.test(pathname)) {
+        return pathname.slice(1).replace(/\//g, path.sep);
+      }
+      return pathname.replace(/\//g, path.sep);
+    } catch {
+      return value;
+    }
+  }
+
+  if (/^\/[A-Za-z]:\//.test(value)) {
+    return value.slice(1).replace(/\//g, path.sep);
+  }
+
+  return value.replace(/\//g, path.sep);
+}
+
+function normalizeTimestamp(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return new Date(value).toISOString();
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  }
+  return null;
 }
 
 export async function parseSubagents(sessionFilePath: string): Promise<Map<string, ParsedMessage[]>> {
