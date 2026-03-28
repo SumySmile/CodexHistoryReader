@@ -42,14 +42,15 @@ function getLang(filePath: string): string {
 }
 
 export function ToolUseBlock({ name, input, id }: Props) {
-  const [expanded, setExpanded] = useState(false);
-  const [copied, setCopied] = useState(false);
-
   const obj = (input && typeof input === 'object') ? input as Record<string, any> : null;
   const inputStr = typeof input === 'string' ? input : JSON.stringify(input, null, 2);
   const colorClass = TOOL_COLORS[name] || 'text-[#6b8578]';
   const Icon = TOOL_ICONS[name] || Wrench;
   const preview = getPreview(name, input);
+  const hasBodyContent = hasToolBodyContent(name, obj, inputStr);
+  const collapsible = hasBodyContent && isToolContentCollapsible(name, obj, inputStr);
+  const [expanded, setExpanded] = useState(hasBodyContent && !collapsible);
+  const [copied, setCopied] = useState(false);
 
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -63,16 +64,18 @@ export function ToolUseBlock({ name, input, id }: Props) {
   return (
     <div className="border border-[#d0ddd5] rounded-lg overflow-hidden bg-white shadow-sm">
       <div
-        role="button"
-        tabIndex={0}
-        onClick={() => setExpanded(!expanded)}
-        onKeyDown={(e) => {
+        role={collapsible ? 'button' : undefined}
+        tabIndex={collapsible ? 0 : undefined}
+        onClick={collapsible ? () => setExpanded(!expanded) : undefined}
+        onKeyDown={collapsible ? (e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
             setExpanded(prev => !prev);
           }
-        }}
-        className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-[#f0f5f2] transition-colors cursor-pointer"
+        } : undefined}
+        className={`flex items-center gap-2 w-full px-3 py-2 text-sm transition-colors ${
+          collapsible ? 'cursor-pointer hover:bg-[#f0f5f2]' : ''
+        }`}
       >
         <Icon size={14} className={colorClass} />
         <span className={`font-medium ${colorClass}`}>{name}</span>
@@ -80,16 +83,62 @@ export function ToolUseBlock({ name, input, id }: Props) {
         <button onClick={handleCopy} className="text-[#9aafa3] hover:text-[#6b8578]" title="Copy">
           {copied ? <Check size={14} /> : <Copy size={14} />}
         </button>
-        {expanded ? <ChevronDown size={14} className="text-[#9aafa3]" /> : <ChevronRight size={14} className="text-[#9aafa3]" />}
+        {collapsible && (expanded ? <ChevronDown size={14} className="text-[#9aafa3]" /> : <ChevronRight size={14} className="text-[#9aafa3]" />)}
       </div>
 
-      {expanded && (
+      {hasBodyContent && expanded && (
         <div className="border-t border-[#d0ddd5] bg-[#f7faf8]">
           <ToolContent name={name} obj={obj} fallback={inputStr} />
         </div>
       )}
     </div>
   );
+}
+
+function hasToolBodyContent(name: string, obj: Record<string, any> | null, fallback: string): boolean {
+  switch (name) {
+    case 'Read':
+      return Boolean(obj?.offset || obj?.limit);
+    case 'Grep':
+      return Boolean(obj?.path || obj?.glob);
+    case 'Glob':
+      return Boolean(obj?.path);
+    case 'WebFetch':
+    case 'WebSearch':
+      return false;
+    default:
+      return Boolean((fallback || '').trim());
+  }
+}
+
+function isToolContentCollapsible(name: string, obj: Record<string, any> | null, fallback: string): boolean {
+  switch (name) {
+    case 'Bash': {
+      const command = typeof obj?.command === 'string' ? obj.command : fallback;
+      return measureText(command).chars > 140 || measureText(command).lines > 3;
+    }
+    case 'Read':
+    case 'Grep':
+    case 'Glob':
+    case 'WebFetch':
+    case 'WebSearch':
+      return false;
+    case 'AskUserQuestion': {
+      const questionCount = Array.isArray(obj?.questions) ? obj.questions.length : 0;
+      return questionCount > 1 || measureText(fallback).chars > 360;
+    }
+    default: {
+      const { chars, lines } = measureText(fallback);
+      return chars > 320 || lines > 8;
+    }
+  }
+}
+
+function measureText(value: string): { chars: number; lines: number } {
+  return {
+    chars: value.length,
+    lines: value.split(/\r?\n/).length,
+  };
 }
 
 function ToolContent({ name, obj, fallback }: { name: string; obj: Record<string, any> | null; fallback: string }) {
@@ -101,9 +150,9 @@ function ToolContent({ name, obj, fallback }: { name: string; obj: Record<string
     case 'Edit': return <EditContent filePath={obj.file_path} oldStr={obj.old_string} newStr={obj.new_string} />;
     case 'apply_patch': return <RawBlock text={typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2)} />;
     case 'Bash': return <BashContent command={obj.command} description={obj.description} />;
-    case 'Read': return <ReadContent filePath={obj.file_path} offset={obj.offset} limit={obj.limit} />;
-    case 'Grep': return <GrepContent pattern={obj.pattern} path={obj.path} glob={obj.glob} />;
-    case 'Glob': return <GlobContent pattern={obj.pattern} path={obj.path} />;
+    case 'Read': return <ReadContent offset={obj.offset} limit={obj.limit} />;
+    case 'Grep': return <GrepContent path={obj.path} glob={obj.glob} />;
+    case 'Glob': return <GlobContent path={obj.path} />;
     case 'Task': return <TaskContent description={obj.description} prompt={obj.prompt} />;
     case 'WebSearch': return <SimpleField label="Query" value={obj.query} />;
     case 'WebFetch': return <SimpleField label="URL" value={obj.url} />;
@@ -188,12 +237,9 @@ function EditContent({ filePath, oldStr, newStr }: { filePath?: string; oldStr?:
 function BashContent({ command, description }: { command?: string; description?: string }) {
   return (
     <div className="p-3">
-      {description && <div className="text-xs text-[#9aafa3] mb-2">{description}</div>}
       <div className="bg-[#2d3d34] rounded-lg p-3 font-mono">
-        <div className="flex items-center gap-2 text-xs text-[#9aafa3] mb-1.5">
-          <span className="text-[#7ec8a0]">$</span> command
-        </div>
-        <pre className="text-sm text-[#e8f0eb] whitespace-pre-wrap break-all">
+        {description && <div className="text-xs text-[#9aafa3] mb-2">{description}</div>}
+        <pre className="text-sm text-[#e8f0eb] whitespace-pre-wrap break-all leading-relaxed">
           {(command || '').slice(0, 5000)}
         </pre>
       </div>
@@ -201,33 +247,30 @@ function BashContent({ command, description }: { command?: string; description?:
   );
 }
 
-function ReadContent({ filePath, offset, limit }: { filePath?: string; offset?: number; limit?: number }) {
+function ReadContent({ offset, limit }: { offset?: number; limit?: number }) {
   return (
     <div className="p-3">
-      {filePath && <FileHeader path={filePath} />}
       {(offset || limit) && (
-        <div className="text-xs text-[#9aafa3] mt-1">
-          {offset ? `Offset: ${offset}` : ''}{offset && limit ? ' · ' : ''}{limit ? `Limit: ${limit} lines` : ''}
+        <div className="text-xs text-[#9aafa3]">
+          {offset ? `Offset: ${offset}` : ''}{offset && limit ? ' / ' : ''}{limit ? `Limit: ${limit} lines` : ''}
         </div>
       )}
     </div>
   );
 }
 
-function GrepContent({ pattern, path, glob }: { pattern?: string; path?: string; glob?: string }) {
+function GrepContent({ path, glob }: { path?: string; glob?: string }) {
   return (
     <div className="p-3 space-y-1.5">
-      {pattern && <div className="font-mono text-sm text-[#3d5248]"><span className="text-[#9878b8] text-xs mr-2">pattern</span>{pattern}</div>}
       {path && <div className="text-xs text-[#9aafa3]">Path: {path}</div>}
       {glob && <div className="text-xs text-[#9aafa3]">Glob: {glob}</div>}
     </div>
   );
 }
 
-function GlobContent({ pattern, path }: { pattern?: string; path?: string }) {
+function GlobContent({ path }: { path?: string }) {
   return (
     <div className="p-3 space-y-1.5">
-      {pattern && <div className="font-mono text-sm text-[#3d5248]"><span className="text-[#48a8b8] text-xs mr-2">pattern</span>{pattern}</div>}
       {path && <div className="text-xs text-[#9aafa3]">Path: {path}</div>}
     </div>
   );
@@ -283,7 +326,7 @@ function getPreview(name: string, input: unknown): string {
     case 'Read': return obj.file_path || '';
     case 'Write': return obj.file_path || '';
     case 'Edit': return obj.file_path || '';
-    case 'Bash': return obj.command?.slice(0, 80) || '';
+    case 'Bash': return '';
     case 'Glob': return obj.pattern || '';
     case 'Grep': return obj.pattern || '';
     case 'Task': return obj.description || '';
@@ -317,7 +360,7 @@ function AskUserQuestionContent({ input }: { input: Record<string, any> }) {
                   <div>
                     <span className="text-[#3d5248]">{opt.label}</span>
                     {opt.description && (
-                      <span className="text-[#9aafa3] ml-1.5 text-xs">— {opt.description}</span>
+                      <span className="text-[#9aafa3] ml-1.5 text-xs">- {opt.description}</span>
                     )}
                   </div>
                 </div>
