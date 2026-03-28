@@ -2,7 +2,7 @@ import { Message, MessageContent, ToolUseAnswerValue, ToolUseQuestion, ToolUseRe
 import { ThinkingBlock } from './ThinkingBlock';
 import { ToolUseBlock } from './ToolUseBlock';
 import { MarkdownRenderer } from '../shared/MarkdownRenderer';
-import { User, Bot, MessageCircle, Check, Pencil } from 'lucide-react';
+import { User, Bot, MessageCircle, Check, Pencil, FilePenLine } from 'lucide-react';
 import { formatDate } from '../../lib/utils';
 import { useState } from 'react';
 
@@ -16,6 +16,15 @@ interface Props {
 
 export function MessageBubble({ message }: Props) {
   const isUser = message.role === 'user';
+  const bubbleClassName = isUser
+    ? 'rounded-2xl border border-[#cfe3d8] bg-[linear-gradient(180deg,#f8fcf9_0%,#f1f8f4_100%)] px-4 py-3 shadow-sm'
+    : 'rounded-2xl border border-[#e3ece7] bg-white px-4 py-3';
+  const roleBadgeClassName = isUser
+    ? 'bg-[#ddf0e4] text-[#2d6b46] border-[#bdd9c7]'
+    : 'bg-[#f0f5f2] text-[#6b8578] border-[#d8e3dd]';
+  const contentClassName = isUser
+    ? 'space-y-3 rounded-xl border border-[#d6e7dd] bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(245,250,247,0.92)_100%)] p-3.5'
+    : 'space-y-3';
 
   // Hide tool-result-only messages UNLESS they contain answers to visible tools
   const isToolResultOnly = message.content.every(c => c.type === 'tool_result');
@@ -33,10 +42,10 @@ export function MessageBubble({ message }: Props) {
         {isUser ? <User size={16} className="text-[#6b8578]" /> : <Bot size={16} className="text-[#4da87a]" />}
       </div>
 
-      <div className="flex-1 min-w-0">
+      <div className={`flex-1 min-w-0 ${bubbleClassName}`}>
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-sm font-medium text-[#2d3d34]">
-            {isUser ? 'User' : 'Assistant'}
+          <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${roleBadgeClassName}`}>
+            {isUser ? 'User Prompt' : 'Assistant'}
           </span>
           {message.model && (
             <span className="text-xs text-[#4da87a] font-medium">
@@ -55,7 +64,23 @@ export function MessageBubble({ message }: Props) {
           )}
         </div>
 
-        <div className="space-y-2">
+        {isUser && (
+          <div className="mb-3 flex items-center gap-2 rounded-xl border border-[#d6e7dd] bg-[#eaf5ee] px-3 py-2">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#2d6b46] shadow-sm">
+              <FilePenLine size={14} />
+            </div>
+            <div className="min-w-0">
+              <div className="text-xs font-semibold uppercase tracking-[0.14em] text-[#2d6b46]">
+                Prompt
+              </div>
+              <div className="text-xs text-[#6b8578]">
+                User input, command, or follow-up instructions
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className={contentClassName}>
           {message.content.map((block, i) => (
             <ContentBlock key={i} block={block} role={message.role} />
           ))}
@@ -72,7 +97,7 @@ function ContentBlock({ block, role }: { block: MessageContent; role: Message['r
       // Slash commands (e.g. "/compact args")
       if (role === 'user' && /^\/\S+/.test(text)) {
         return (
-          <div className="text-sm text-[#5a9ec8] font-mono bg-[#e8f0eb] rounded px-2 py-1 inline-block">
+          <div className="text-sm text-[#5a9ec8] font-mono bg-[#e2eef6] rounded-lg px-2.5 py-1.5 inline-block border border-[#c6dbea]">
             {text}
           </div>
         );
@@ -80,7 +105,7 @@ function ContentBlock({ block, role }: { block: MessageContent; role: Message['r
       // Interrupted placeholders
       if (role === 'user' && /^\[Request interrupted/i.test(text)) {
         return (
-          <div className="text-sm text-[#9aafa3] italic">
+          <div className="rounded-lg border border-[#d7dee0] bg-[#f5f7f8] px-3 py-2 text-sm text-[#7f9098] italic">
             {text}
           </div>
         );
@@ -155,7 +180,7 @@ function UserAnswerBlock({ content, toolUseResult }: { content: string; toolUseR
                         <div>
                           <span className={isSelected ? 'text-[#2d6b46] font-medium' : 'text-[#6b8578]'}>{option.label}</span>
                           {option.description && (
-                            <span className="text-[#9aafa3] ml-1.5 text-xs"> — {option.description}</span>
+                            <span className="text-[#9aafa3] ml-1.5 text-xs"> - {option.description}</span>
                           )}
                         </div>
                       </div>
@@ -318,19 +343,22 @@ function normalizeLookupKey(value: string): string {
 function CollapsibleMarkdownBlock({ text, role }: { text: string; role: Message['role'] }) {
   const [expanded, setExpanded] = useState(false);
   const lineCount = text.split(/\r?\n/).length;
-  const isPlanLike = /implement the following plan|^#\s*plan[:：]|计划|方案/i.test(text);
+  const isPlanLike = /implement the following plan|^#\s*plan\b/i.test(text);
   const shouldCollapse = text.length > 1200 || lineCount > 24 || (role === 'user' && isPlanLike && text.length > 500);
+  const wrapperClassName = role === 'user'
+    ? 'rounded-xl border border-[#dbe9e0] bg-white/90 px-4 py-3 text-[#30443a] shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]'
+    : 'text-[#3d5248]';
 
   if (!shouldCollapse) {
     return (
-      <div className="markdown-content text-[#3d5248]">
+      <div className={`markdown-content ${wrapperClassName}`}>
         <MarkdownRenderer content={text} />
       </div>
     );
   }
 
   return (
-    <div>
+    <div className={role === 'user' ? wrapperClassName : ''}>
       <div
         className="markdown-content text-[#3d5248] overflow-hidden"
         style={expanded ? undefined : { display: '-webkit-box', WebkitLineClamp: 8, WebkitBoxOrient: 'vertical' as const }}
