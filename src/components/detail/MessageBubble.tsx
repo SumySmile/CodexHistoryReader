@@ -2,7 +2,7 @@ import { Message, MessageContent, ToolUseAnswerValue, ToolUseQuestion, ToolUseRe
 import { ThinkingBlock } from './ThinkingBlock';
 import { ToolUseBlock } from './ToolUseBlock';
 import { MarkdownRenderer } from '../shared/MarkdownRenderer';
-import { User, Bot, MessageCircle, Check, Pencil, FilePenLine } from 'lucide-react';
+import { User, Bot, MessageCircle, Check, Pencil } from 'lucide-react';
 import { formatDate } from '../../lib/utils';
 import { useState } from 'react';
 
@@ -16,15 +16,10 @@ interface Props {
 
 export function MessageBubble({ message }: Props) {
   const isUser = message.role === 'user';
-  const bubbleClassName = isUser
-    ? 'rounded-2xl border border-[#cfe3d8] bg-[linear-gradient(180deg,#f8fcf9_0%,#f1f8f4_100%)] px-4 py-3 shadow-sm'
-    : 'rounded-2xl border border-[#e3ece7] bg-white px-4 py-3';
+  const bubbleClassName = 'rounded-2xl border border-[#e3ece7] bg-white px-4 py-3';
   const roleBadgeClassName = isUser
     ? 'bg-[#ddf0e4] text-[#2d6b46] border-[#bdd9c7]'
     : 'bg-[#f0f5f2] text-[#6b8578] border-[#d8e3dd]';
-  const contentClassName = isUser
-    ? 'space-y-3 rounded-xl border border-[#d6e7dd] bg-[linear-gradient(180deg,rgba(255,255,255,0.96)_0%,rgba(245,250,247,0.92)_100%)] p-3.5'
-    : 'space-y-3';
 
   // Hide tool-result-only messages UNLESS they contain answers to visible tools
   const isToolResultOnly = message.content.every(c => c.type === 'tool_result');
@@ -36,10 +31,14 @@ export function MessageBubble({ message }: Props) {
 
   return (
     <div className="flex gap-3 px-4">
-      <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-1 ${
-        isUser ? 'bg-[#e8f0eb]' : 'bg-[#7ec8a0]/15'
-      }`}>
-        {isUser ? <User size={16} className="text-[#6b8578]" /> : <Bot size={16} className="text-[#4da87a]" />}
+      <div
+        className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-1 border shadow-sm ${
+          isUser
+            ? 'bg-[#dff1e7] border-[#96c9ad] ring-2 ring-[#d8ede0]'
+            : 'bg-[#eef7f1] border-[#d5e7dc]'
+        }`}
+      >
+        {isUser ? <User size={16} className="text-[#2d6b46]" /> : <Bot size={16} className="text-[#4da87a]" />}
       </div>
 
       <div className={`flex-1 min-w-0 ${bubbleClassName}`}>
@@ -64,23 +63,7 @@ export function MessageBubble({ message }: Props) {
           )}
         </div>
 
-        {isUser && (
-          <div className="mb-3 flex items-center gap-2 rounded-xl border border-[#d6e7dd] bg-[#eaf5ee] px-3 py-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#2d6b46] shadow-sm">
-              <FilePenLine size={14} />
-            </div>
-            <div className="min-w-0">
-              <div className="text-xs font-semibold uppercase tracking-[0.14em] text-[#2d6b46]">
-                Prompt
-              </div>
-              <div className="text-xs text-[#6b8578]">
-                User input, command, or follow-up instructions
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div className={contentClassName}>
+        <div className="space-y-3">
           {message.content.map((block, i) => (
             <ContentBlock key={i} block={block} role={message.role} />
           ))}
@@ -346,7 +329,7 @@ function CollapsibleMarkdownBlock({ text, role }: { text: string; role: Message[
   const isPlanLike = /implement the following plan|^#\s*plan\b/i.test(text);
   const shouldCollapse = text.length > 1200 || lineCount > 24 || (role === 'user' && isPlanLike && text.length > 500);
   const wrapperClassName = role === 'user'
-    ? 'rounded-xl border border-[#dbe9e0] bg-white/90 px-4 py-3 text-[#30443a] shadow-[inset_0_1px_0_rgba(255,255,255,0.9)]'
+    ? 'rounded-r-lg border-l-3 border-[#b9d8c6] bg-[linear-gradient(90deg,rgba(236,248,241,0.95)_0%,rgba(236,248,241,0.35)_28%,transparent_100%)] px-3 py-1 text-[#3d5248]'
     : 'text-[#3d5248]';
 
   if (!shouldCollapse) {
