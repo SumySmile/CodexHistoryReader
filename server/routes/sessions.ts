@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { getDb } from '../db/connection.js';
-import { parseSession, parseSubagents } from '../services/parser.js';
+import { getSessionMetrics, parseSession, parseSubagents } from '../services/parser.js';
 import { exportSession } from '../services/exporter.js';
+import { invalidateStatsCache } from '../services/stats.js';
 
 const router = Router();
 
@@ -319,15 +320,19 @@ router.get('/:id/messages', async (req, res) => {
 
     // Update message count and model if not set
     if (messages.length > 0) {
-      const model = messages.find(m => m.model)?.model;
-      const totalInput = messages.reduce((sum, m) => sum + m.input_tokens, 0);
-      const totalOutput = messages.reduce((sum, m) => sum + m.output_tokens, 0);
-      const toolCalls = messages.reduce((sum, m) =>
-        sum + m.content.filter(c => c.type === 'tool_use').length, 0);
+      const metrics = await getSessionMetrics(session.file_path, messages);
 
       db.prepare(`UPDATE sessions SET message_count = ?, model = COALESCE(?, model),
         total_input_tokens = ?, total_output_tokens = ?, tool_call_count = ? WHERE id = ?`)
-        .run(messages.length, model, totalInput, totalOutput, toolCalls, session.id);
+        .run(
+          metrics.messageCount,
+          metrics.model,
+          metrics.totalInputTokens,
+          metrics.totalOutputTokens,
+          metrics.toolCallCount,
+          session.id,
+        );
+      invalidateStatsCache();
     }
 
     // Backfill title for split/continued sessions where first user message is interrupted noise.

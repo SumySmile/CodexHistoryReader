@@ -13,6 +13,14 @@ import type {
 } from '../types.js';
 import { normalizeMessageText } from './text-normalization.js';
 
+export interface SessionMetrics {
+  messageCount: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  toolCallCount: number;
+  model: string | null;
+}
+
 export async function parseSession(filePath: string): Promise<ParsedMessage[]> {
   const virtualComposerPath = parseCursorComposerVirtualPath(filePath);
   if (!virtualComposerPath && !fs.existsSync(filePath)) return [];
@@ -133,6 +141,77 @@ export async function parseSession(filePath: string): Promise<ParsedMessage[]> {
   }
 
   return splitClaudeThinkingMessages(messages);
+}
+
+export async function getSessionMetrics(filePath: string, messages?: ParsedMessage[]): Promise<SessionMetrics> {
+  const resolvedMessages = messages || await parseSession(filePath);
+  const metrics = summarizeMessages(resolvedMessages);
+
+  if (isCodexSessionFile(filePath)) {
+    const codexMetrics = await extractCodexSessionMetrics(filePath);
+    metrics.totalInputTokens = codexMetrics.totalInputTokens;
+    metrics.totalOutputTokens = codexMetrics.totalOutputTokens;
+    if (!metrics.model && codexMetrics.model) {
+      metrics.model = codexMetrics.model;
+    }
+  }
+
+  return metrics;
+}
+
+function summarizeMessages(messages: ParsedMessage[]): SessionMetrics {
+  return {
+    messageCount: messages.length,
+    totalInputTokens: messages.reduce((sum, message) => sum + (message.input_tokens || 0), 0),
+    totalOutputTokens: messages.reduce((sum, message) => sum + (message.output_tokens || 0), 0),
+    toolCallCount: messages.reduce(
+      (sum, message) => sum + message.content.filter(block => block.type === 'tool_use').length,
+      0,
+    ),
+    model: messages.find(message => message.model)?.model || null,
+  };
+}
+
+function isCodexSessionFile(filePath: string): boolean {
+  return filePath.replace(/[\\/]+/g, '/').toLowerCase().includes('/.codex/sessions/');
+}
+
+async function extractCodexSessionMetrics(filePath: string): Promise<{
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  model: string | null;
+}> {
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let model: string | null = null;
+
+  const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
+  const rl = readline.createInterface({ input: stream });
+
+  for await (const line of rl) {
+    if (!line.trim()) continue;
+
+    try {
+      const obj = JSON.parse(line);
+      const record = obj.type === 'response_item' && obj.payload ? obj.payload : obj;
+
+      if (!model && record?.type === 'message' && typeof record.model === 'string') {
+        model = record.model;
+      }
+
+      if (obj.type === 'event_msg' && obj.payload?.type === 'token_count') {
+        const usage = obj.payload?.info?.total_token_usage;
+        if (usage && typeof usage === 'object') {
+          totalInputTokens = Math.max(totalInputTokens, Number(usage.input_tokens) || 0);
+          totalOutputTokens = Math.max(totalOutputTokens, Number(usage.output_tokens) || 0);
+        }
+      }
+    } catch {
+      // ignore malformed lines
+    }
+  }
+
+  return { totalInputTokens, totalOutputTokens, model };
 }
 
 function parseCursorComposerSessionById(composerId: string): ParsedMessage[] {

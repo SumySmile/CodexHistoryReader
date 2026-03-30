@@ -1,5 +1,6 @@
 import { getDb } from '../db/connection.js';
-import { parseSession } from './parser.js';
+import { getSessionMetrics, parseSession } from './parser.js';
+import { invalidateStatsCache } from './stats.js';
 
 let isIndexing = false;
 
@@ -17,7 +18,10 @@ export async function buildIndex(): Promise<void> {
   try {
     const db = getDb();
     const sessions = db.prepare(
-      'SELECT id, file_path FROM sessions WHERE indexed_at IS NULL'
+      `SELECT id, file_path
+       FROM sessions
+       WHERE indexed_at IS NULL
+          OR (id LIKE 'codex-%' AND total_input_tokens = 0 AND total_output_tokens = 0)`
     ).all() as { id: string; file_path: string }[];
 
     console.log(`[indexer] ${sessions.length} sessions to index`);
@@ -29,15 +33,27 @@ export async function buildIndex(): Promise<void> {
 
     for (const session of sessions) {
       try {
-        await indexSession(session.id, session.file_path, insertFts);
-        db.prepare('UPDATE sessions SET indexed_at = ? WHERE id = ?')
-          .run(new Date().toISOString(), session.id);
+        const metrics = await indexSession(session.id, session.file_path, insertFts);
+        db.prepare(`UPDATE sessions
+          SET indexed_at = ?, message_count = ?, model = COALESCE(?, model),
+              total_input_tokens = ?, total_output_tokens = ?, tool_call_count = ?
+          WHERE id = ?`)
+          .run(
+            new Date().toISOString(),
+            metrics.messageCount,
+            metrics.model,
+            metrics.totalInputTokens,
+            metrics.totalOutputTokens,
+            metrics.toolCallCount,
+            session.id,
+          );
       } catch (e) {
         console.error(`[indexer] Failed to index ${session.id}:`, e);
       }
     }
   } finally {
     isIndexing = false;
+    invalidateStatsCache();
     console.log('[indexer] Indexing complete');
   }
 }
@@ -46,7 +62,7 @@ async function indexSession(
   sessionId: string,
   filePath: string,
   insertStmt: any
-): Promise<void> {
+): Promise<Awaited<ReturnType<typeof getSessionMetrics>>> {
   const messages = await parseSession(filePath);
   for (const message of messages) {
     const content = message.content
@@ -72,6 +88,8 @@ async function indexSession(
       insertStmt.run(sessionId, message.uuid, message.role, content.slice(0, 50000), message.timestamp);
     }
   }
+
+  return getSessionMetrics(filePath, messages);
 }
 
 export async function reindexSession(sessionId: string, filePath: string): Promise<void> {
@@ -85,7 +103,19 @@ export async function reindexSession(sessionId: string, filePath: string): Promi
     VALUES (?, ?, ?, ?, ?)
   `);
 
-  await indexSession(sessionId, filePath, insertFts);
-  db.prepare('UPDATE sessions SET indexed_at = ? WHERE id = ?')
-    .run(new Date().toISOString(), sessionId);
+  const metrics = await indexSession(sessionId, filePath, insertFts);
+  db.prepare(`UPDATE sessions
+    SET indexed_at = ?, message_count = ?, model = COALESCE(?, model),
+        total_input_tokens = ?, total_output_tokens = ?, tool_call_count = ?
+    WHERE id = ?`)
+    .run(
+      new Date().toISOString(),
+      metrics.messageCount,
+      metrics.model,
+      metrics.totalInputTokens,
+      metrics.totalOutputTokens,
+      metrics.toolCallCount,
+      sessionId,
+    );
+  invalidateStatsCache();
 }

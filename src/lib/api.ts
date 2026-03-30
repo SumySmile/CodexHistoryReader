@@ -169,6 +169,14 @@ export interface StatsData {
   projectCount: number;
   dailyActivity: { date: string; sessions: number; messages: number }[];
   modelUsage: { model: string; count: number }[];
+  sourceUsage: {
+    source: 'claude' | 'codex' | 'copilot';
+    sessions: number;
+    inputTokens: number;
+    outputTokens: number;
+    tokens: number;
+    toolCalls: number;
+  }[];
   projectDistribution: { project: string; sessions: number }[];
 }
 
