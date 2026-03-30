@@ -132,7 +132,7 @@ export async function parseSession(filePath: string): Promise<ParsedMessage[]> {
     }
   }
 
-  return messages;
+  return splitClaudeThinkingMessages(messages);
 }
 
 function parseCursorComposerSessionById(composerId: string): ParsedMessage[] {
@@ -537,6 +537,43 @@ function parseClaudeAssistantMessage(obj: any): ParsedMessage | null {
     output_tokens: obj.message?.usage?.output_tokens || 0,
     duration_ms: null,
   };
+}
+
+function splitClaudeThinkingMessages(messages: ParsedMessage[]): ParsedMessage[] {
+  const result: ParsedMessage[] = [];
+
+  for (const message of messages) {
+    if (message.role !== 'assistant' || message.type !== 'assistant') {
+      result.push(message);
+      continue;
+    }
+
+    const thinkingBlocks = message.content.filter(
+      (block): block is Extract<MessageContent, { type: 'thinking' }> => block.type === 'thinking'
+    );
+    const otherBlocks = message.content.filter(block => block.type !== 'thinking');
+
+    if (thinkingBlocks.length === 0 || otherBlocks.length === 0) {
+      result.push(message);
+      continue;
+    }
+
+    thinkingBlocks.forEach((block, index) => {
+      result.push({
+        ...message,
+        uuid: `${message.uuid}-thinking-${index + 1}`,
+        type: 'assistant_thinking',
+        content: [block],
+      });
+    });
+
+    result.push({
+      ...message,
+      content: otherBlocks,
+    });
+  }
+
+  return result;
 }
 
 function extractClaudeAssistantContent(blocks: any[]): MessageContent[] {

@@ -99,7 +99,7 @@ export function ToolUseBlock({ name, input, id }: Props) {
 function hasToolBodyContent(name: string, obj: Record<string, any> | null, fallback: string): boolean {
   switch (name) {
     case 'Read':
-      return Boolean(obj?.path || obj?.file_path || obj?.offset || obj?.limit);
+      return Boolean(obj?.offset || obj?.limit);
     case 'Grep':
       return Boolean(obj?.path || obj?.glob);
     case 'Glob':
@@ -118,7 +118,7 @@ function isToolContentCollapsible(name: string, obj: Record<string, any> | null,
   switch (name) {
     case 'Bash': {
       const command = typeof obj?.command === 'string' ? obj.command : fallback;
-      return measureText(command).chars > 140 || measureText(command).lines > 3;
+      return measureText(command).lines > 3;
     }
     case 'Read':
     case 'Grep':
@@ -154,7 +154,7 @@ function ToolContent({ name, obj, fallback }: { name: string; obj: Record<string
     case 'Edit': return <EditContent filePath={obj.file_path} oldStr={obj.old_string} newStr={obj.new_string} />;
     case 'apply_patch': return <RawBlock text={typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2)} />;
     case 'Bash': return <BashContent command={obj.command} description={obj.description} />;
-    case 'Read': return <ReadContent path={obj.path || obj.file_path} offset={obj.offset} limit={obj.limit} />;
+    case 'Read': return <ReadContent offset={obj.offset} limit={obj.limit} />;
     case 'Grep': return <GrepContent path={obj.path} glob={obj.glob} />;
     case 'Glob': return <GlobContent path={obj.path} />;
     case 'Search': return <SimpleField label="Query" value={obj.query} />;
@@ -252,10 +252,9 @@ function BashContent({ command, description }: { command?: string; description?:
   );
 }
 
-function ReadContent({ path, offset, limit }: { path?: string; offset?: number; limit?: number }) {
+function ReadContent({ offset, limit }: { offset?: number; limit?: number }) {
   return (
     <div className="p-3">
-      {path && <div className="text-xs text-[#9aafa3] mb-1.5">Path: {path}</div>}
       {(offset || limit) && (
         <div className="text-xs text-[#9aafa3]">
           {offset ? `Offset: ${offset}` : ''}{offset && limit ? ' / ' : ''}{limit ? `Limit: ${limit} lines` : ''}
