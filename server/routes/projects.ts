@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { getDb } from '../db/connection.js';
+import { getHiddenCodexChildSql } from '../services/codex-lineage.js';
 
 const router = Router();
 
 // GET /api/projects - List all projects with session counts
 router.get('/', (_req, res) => {
   const db = getDb();
+  const hiddenCodexChildSql = getHiddenCodexChildSql('sessions');
   const projects = db.prepare(`
     SELECT
       project_slug,
@@ -14,6 +16,7 @@ router.get('/', (_req, res) => {
       MAX(modified_at) as last_activity,
       SUM(message_count) as total_messages
     FROM sessions
+    WHERE NOT ${hiddenCodexChildSql}
     GROUP BY project_slug
     ORDER BY last_activity DESC
   `).all();

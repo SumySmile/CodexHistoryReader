@@ -1,5 +1,6 @@
 import { getDb } from '../db/connection.js';
 import type { StatsData } from '../types.js';
+import { getHiddenCodexChildSql } from './codex-lineage.js';
 
 let memCache: { data: StatsData; expiresAt: number } | null = null;
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -20,6 +21,7 @@ export function getStats(): StatsData {
   }
 
   const db = getDb();
+  const visibleSessionWhere = `WHERE NOT ${getHiddenCodexChildSql('sessions')}`;
 
   const totals = db.prepare(`
     SELECT
@@ -37,6 +39,7 @@ export function getStats(): StatsData {
       )) as avgTokensPerSession,
       COUNT(DISTINCT project_slug) as projectCount
     FROM sessions
+    ${visibleSessionWhere}
   `).get() as {
     totalSessions: number;
     totalMessages: number;
@@ -53,7 +56,7 @@ export function getStats(): StatsData {
       COUNT(*) as sessions,
       COALESCE(SUM(message_count), 0) as messages
     FROM sessions
-    WHERE COALESCE(modified_at, created_at) IS NOT NULL
+    ${visibleSessionWhere} AND COALESCE(modified_at, created_at) IS NOT NULL
     GROUP BY date(COALESCE(modified_at, created_at))
     ORDER BY date ASC
   `).all() as { date: string; sessions: number; messages: number }[];
@@ -63,7 +66,7 @@ export function getStats(): StatsData {
       model,
       COALESCE(SUM(total_input_tokens + total_output_tokens), 0) as count
     FROM sessions
-    WHERE model IS NOT NULL AND TRIM(model) <> ''
+    ${visibleSessionWhere} AND model IS NOT NULL AND TRIM(model) <> ''
     GROUP BY model
     ORDER BY count DESC, model ASC
     LIMIT 20
@@ -78,6 +81,7 @@ export function getStats(): StatsData {
       COALESCE(SUM(total_input_tokens + total_output_tokens), 0) as tokens,
       COALESCE(SUM(tool_call_count), 0) as toolCalls
     FROM sessions
+    ${visibleSessionWhere}
     GROUP BY ${SOURCE_SQL}
     ORDER BY sessions DESC
   `).all() as StatsData['sourceUsage'];
@@ -85,6 +89,7 @@ export function getStats(): StatsData {
   const projectDistribution = db.prepare(`
     SELECT project_slug as project, COUNT(*) as sessions
     FROM sessions
+    ${visibleSessionWhere}
     GROUP BY project_slug
     ORDER BY sessions DESC
     LIMIT 20

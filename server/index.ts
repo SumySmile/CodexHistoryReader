@@ -5,6 +5,7 @@ import { getDb } from './db/connection.js';
 import { scanAllProjects } from './services/scanner.js';
 import { buildIndex, getIndexingStatus } from './services/indexer.js';
 import { startWatcher, onFileChange } from './services/watcher.js';
+import { getHiddenCodexChildSql } from './services/codex-lineage.js';
 import { sanitizeConversationText } from './services/text-normalization.js';
 import { parseSession } from './services/parser.js';
 import type { MessageContent } from './types.js';
@@ -55,7 +56,7 @@ app.get('/api/models', (_req, res) => {
   const db = getDb();
   const source = typeof _req.query.source === 'string' ? _req.query.source : undefined;
   const params: string[] = [];
-  let whereClause = 'model IS NOT NULL';
+  let whereClause = `model IS NOT NULL AND NOT ${getHiddenCodexChildSql('sessions')}`;
 
   if (source === 'claude' || source === 'codex' || source === 'copilot') {
     whereClause += ` AND CASE

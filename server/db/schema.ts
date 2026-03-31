@@ -49,6 +49,22 @@ export function initSchema(db: Database.Database): void {
   if (!hasCustomTitle) {
     db.exec(`ALTER TABLE sessions ADD COLUMN custom_title TEXT;`);
   }
+  const hasParentSessionId = sessionCols.some(c => c.name === 'parent_session_id');
+  if (!hasParentSessionId) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN parent_session_id TEXT;`);
+  }
+  const hasIsSubagent = sessionCols.some(c => c.name === 'is_subagent');
+  if (!hasIsSubagent) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN is_subagent INTEGER DEFAULT 0;`);
+  }
+  const hasCodexLineageChecked = sessionCols.some(c => c.name === 'codex_lineage_checked');
+  if (!hasCodexLineageChecked) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN codex_lineage_checked INTEGER DEFAULT 0;`);
+  }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sessions_parent_session ON sessions(parent_session_id);
+  `);
 
   // FTS5 table - create separately as it doesn't support IF NOT EXISTS well
   try {

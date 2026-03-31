@@ -17,6 +17,9 @@ export interface SessionRecord {
   is_favorite: number;
   indexed_at: string | null;
   custom_title: string | null;
+  parent_session_id: string | null;
+  is_subagent: number;
+  codex_lineage_checked: number;
 }
 
 export interface TagRecord {

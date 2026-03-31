@@ -1,4 +1,5 @@
 import { getDb } from '../db/connection.js';
+import { resolveCodexRootSessionId, resolveLatestCodexLineageSession } from './codex-lineage.js';
 import { parseSessionWithMetrics } from './parser.js';
 import { invalidateStatsCache } from './stats.js';
 
@@ -45,6 +46,7 @@ export async function buildIndex(): Promise<void> {
             metrics.toolCallCount,
             session.id,
           );
+        refreshCodexRootSessionSnapshot(session.id);
       } catch (e) {
         console.error(`[indexer] Failed to index ${session.id}:`, e);
       }
@@ -125,12 +127,49 @@ export async function reindexSession(sessionId: string, filePath: string): Promi
         metrics.toolCallCount,
         sessionId,
       );
+    refreshCodexRootSessionSnapshot(sessionId);
     invalidateStatsCache();
   });
 }
 
 function yieldToEventLoop(): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+function refreshCodexRootSessionSnapshot(sessionId: string): void {
+  if (!sessionId.startsWith('codex-')) return;
+
+  const db = getDb();
+  const rootId = resolveCodexRootSessionId(db, sessionId);
+  const latest = resolveLatestCodexLineageSession(db, rootId) as {
+    modified_at: string | null;
+    message_count: number;
+    model: string | null;
+    total_input_tokens: number;
+    total_output_tokens: number;
+    tool_call_count: number;
+  } | null;
+
+  if (!latest) return;
+
+  db.prepare(`
+    UPDATE sessions
+    SET modified_at = COALESCE(?, modified_at),
+        message_count = ?,
+        model = COALESCE(?, model),
+        total_input_tokens = ?,
+        total_output_tokens = ?,
+        tool_call_count = ?
+    WHERE id = ?
+  `).run(
+    latest.modified_at,
+    latest.message_count,
+    latest.model,
+    latest.total_input_tokens,
+    latest.total_output_tokens,
+    latest.tool_call_count,
+    rootId,
+  );
 }
 
 function enqueueIndexTask<T>(task: () => Promise<T>): Promise<T> {

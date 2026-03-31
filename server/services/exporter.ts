@@ -1,13 +1,17 @@
 import { parseSession } from './parser.js';
 import type { ParsedMessage, ToolResultContent, ToolUseAnswerValue, ToolUseResultData } from '../types.js';
 import { getDb } from '../db/connection.js';
+import { isCodexSessionId, resolveLatestCodexLineageSession } from './codex-lineage.js';
 
 export async function exportSession(sessionId: string, format: 'md' | 'json'): Promise<string> {
   const db = getDb();
   const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) as any;
   if (!session) throw new Error('Session not found');
 
-  const messages = await parseSession(session.file_path);
+  const contentSession = isCodexSessionId(session.id) && !session.parent_session_id
+    ? resolveLatestCodexLineageSession(db, session.id) || session
+    : session;
+  const messages = await parseSession(contentSession.file_path);
 
   if (format === 'json') {
     return JSON.stringify({ session, messages }, null, 2);

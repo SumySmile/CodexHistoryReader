@@ -27,9 +27,11 @@ const CODEX_ID_PREFIX = 'codex-';
 const COPILOT_ID_PREFIX = 'copilot-';
 const SESSION_UPSERT_SQL = `
   INSERT INTO sessions (id, project_slug, project_path, summary, first_prompt, message_count,
-    git_branch, model, created_at, modified_at, file_path, file_mtime)
+    git_branch, model, created_at, modified_at, file_path, file_mtime,
+    parent_session_id, is_subagent, codex_lineage_checked)
   VALUES (@id, @project_slug, @project_path, @summary, @first_prompt, @message_count,
-    @git_branch, @model, @created_at, @modified_at, @file_path, @file_mtime)
+    @git_branch, @model, @created_at, @modified_at, @file_path, @file_mtime,
+    @parent_session_id, @is_subagent, @codex_lineage_checked)
   ON CONFLICT(id) DO UPDATE SET
     summary = COALESCE(@summary, summary),
     first_prompt = COALESCE(@first_prompt, first_prompt),
@@ -41,6 +43,12 @@ const SESSION_UPSERT_SQL = `
     modified_at = COALESCE(@modified_at, modified_at),
     file_path = COALESCE(@file_path, file_path),
     file_mtime = COALESCE(@file_mtime, file_mtime),
+    parent_session_id = COALESCE(@parent_session_id, parent_session_id),
+    is_subagent = CASE
+      WHEN COALESCE(@codex_lineage_checked, 0) = 1 THEN COALESCE(@is_subagent, 0)
+      ELSE is_subagent
+    END,
+    codex_lineage_checked = MAX(COALESCE(codex_lineage_checked, 0), COALESCE(@codex_lineage_checked, 0)),
     indexed_at = CASE
       WHEN COALESCE(@file_path, '') <> COALESCE(file_path, '')
         OR COALESCE(@file_mtime, -1) <> COALESCE(file_mtime, -1)
@@ -204,6 +212,9 @@ async function upsertClaudeSessionFile(upsert: any, filePath: string): Promise<s
     modified_at: new Date(stat.mtimeMs).toISOString(),
     file_path: filePath,
     file_mtime: stat.mtimeMs,
+    parent_session_id: null,
+    is_subagent: 0,
+    codex_lineage_checked: 0,
   });
 
   return sessionId;
@@ -234,6 +245,9 @@ async function upsertCodexSessionFile(upsert: any, filePath: string): Promise<st
     modified_at: indexEntry?.updated_at || new Date(stat.mtimeMs).toISOString(),
     file_path: filePath,
     file_mtime: stat.mtimeMs,
+    parent_session_id: meta.parentSessionId || null,
+    is_subagent: meta.isSubagent ? 1 : 0,
+    codex_lineage_checked: 1,
   });
 
   return sessionId;
@@ -261,6 +275,9 @@ async function upsertVsCodeCopilotSessionFile(upsert: any, filePath: string): Pr
     modified_at: meta.modifiedAt || new Date(stat.mtimeMs).toISOString(),
     file_path: filePath,
     file_mtime: stat.mtimeMs,
+    parent_session_id: null,
+    is_subagent: 0,
+    codex_lineage_checked: 0,
   });
 
   return sessionId;
@@ -307,6 +324,9 @@ async function upsertCursorTranscriptSessionFile(upsert: any, filePath: string):
     modified_at: modifiedAt || new Date(stat.mtimeMs).toISOString(),
     file_path: filePath,
     file_mtime: stat.mtimeMs,
+    parent_session_id: null,
+    is_subagent: 0,
+    codex_lineage_checked: 0,
   });
 
   return sessionId;
@@ -365,6 +385,9 @@ async function upsertCursorWorkspaceStateSessionFile(upsert: any, stateDbPath: s
     modified_at: generationTimes[generationTimes.length - 1] || new Date(stat.mtimeMs).toISOString(),
     file_path: stateDbPath,
     file_mtime: stat.mtimeMs,
+    parent_session_id: null,
+    is_subagent: 0,
+    codex_lineage_checked: 0,
   });
 
   return sessionId;
@@ -412,6 +435,9 @@ async function scanClaudeProjects(upsert: any): Promise<number> {
             modified_at: entry.modified || entry.lastModified || null,
             file_path: filePath,
             file_mtime: entry.fileMtime || null,
+            parent_session_id: null,
+            is_subagent: 0,
+            codex_lineage_checked: 0,
           });
           count++;
         }
@@ -444,6 +470,9 @@ async function scanClaudeProjects(upsert: any): Promise<number> {
           modified_at: new Date(stat.mtimeMs).toISOString(),
           file_path: filePath,
           file_mtime: stat.mtimeMs,
+          parent_session_id: null,
+          is_subagent: 0,
+          codex_lineage_checked: 0,
         });
         count++;
       } catch (e) {
@@ -471,8 +500,8 @@ async function scanCodexSessions(upsert: any): Promise<number> {
 
       const sessionId = `${CODEX_ID_PREFIX}${meta.sessionId}`;
       const stat = fs.statSync(filePath);
-      const existing = db.prepare('SELECT file_mtime FROM sessions WHERE id = ?').get(sessionId) as any;
-      if (existing && existing.file_mtime >= stat.mtimeMs) continue;
+      const existing = db.prepare('SELECT file_mtime, codex_lineage_checked FROM sessions WHERE id = ?').get(sessionId) as any;
+      if (existing && existing.file_mtime >= stat.mtimeMs && existing.codex_lineage_checked === 1) continue;
 
       const indexEntry = indexMap.get(meta.sessionId);
       const summary = sanitizeConversationText(indexEntry?.thread_name || null);
@@ -491,6 +520,9 @@ async function scanCodexSessions(upsert: any): Promise<number> {
         modified_at: indexEntry?.updated_at || new Date(stat.mtimeMs).toISOString(),
         file_path: filePath,
         file_mtime: stat.mtimeMs,
+        parent_session_id: meta.parentSessionId || null,
+        is_subagent: meta.isSubagent ? 1 : 0,
+        codex_lineage_checked: 1,
       });
       count++;
     } catch (e) {
@@ -543,6 +575,9 @@ async function scanVsCodeCopilotSessions(upsert: any): Promise<number> {
           modified_at: meta.modifiedAt || new Date(stat.mtimeMs).toISOString(),
           file_path: filePath,
           file_mtime: stat.mtimeMs,
+          parent_session_id: null,
+          is_subagent: 0,
+          codex_lineage_checked: 0,
         });
         count++;
       } catch (e) {
@@ -608,6 +643,9 @@ async function scanCursorGlobalComposerSessions(upsert: any): Promise<{
       modified_at: modifiedAt,
       file_path: buildCursorComposerVirtualPath(composerId),
       file_mtime: null,
+      parent_session_id: null,
+      is_subagent: 0,
+      codex_lineage_checked: 0,
     });
     countSet.add(composerId);
     count++;
@@ -682,6 +720,9 @@ async function scanCursorTranscriptSessions(
         modified_at: modifiedAt || new Date(stat.mtimeMs).toISOString(),
         file_path: filePath,
         file_mtime: stat.mtimeMs,
+        parent_session_id: null,
+        is_subagent: 0,
+        codex_lineage_checked: 0,
       });
       count++;
     } catch (e) {
@@ -753,6 +794,9 @@ async function scanCursorWorkspaceStateSessions(upsert: any, skipWorkspaceIds: S
         modified_at: generationTimes[generationTimes.length - 1] || new Date(stat.mtimeMs).toISOString(),
         file_path: stateDbPath,
         file_mtime: stat.mtimeMs,
+        parent_session_id: null,
+        is_subagent: 0,
+        codex_lineage_checked: 0,
       });
       count++;
     } catch (e) {
@@ -1013,7 +1057,13 @@ async function parseClaudeFirstLines(filePath: string): Promise<{
 }
 
 async function parseCodexFirstLines(filePath: string): Promise<{
-  sessionId?: string; firstPrompt?: string; cwd?: string; model?: string; timestamp?: string;
+  sessionId?: string;
+  firstPrompt?: string;
+  cwd?: string;
+  model?: string;
+  timestamp?: string;
+  parentSessionId?: string;
+  isSubagent?: boolean;
 }> {
   return new Promise((resolve) => {
     const result: any = {};
@@ -1037,6 +1087,13 @@ async function parseCodexFirstLines(filePath: string): Promise<{
           }
           if (!result.cwd && typeof obj.payload.cwd === 'string') {
             result.cwd = obj.payload.cwd;
+          }
+          const parentThreadId = obj.payload?.source?.subagent?.thread_spawn?.parent_thread_id;
+          if (!result.parentSessionId && typeof parentThreadId === 'string' && parentThreadId.trim()) {
+            result.parentSessionId = parentThreadId;
+            result.isSubagent = true;
+          } else if (!result.parentSessionId && typeof obj.payload.forked_from_id === 'string' && obj.payload.forked_from_id.trim()) {
+            result.parentSessionId = obj.payload.forked_from_id;
           }
           return;
         }
