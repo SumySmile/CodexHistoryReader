@@ -10,12 +10,24 @@ import {
   PROJECTS_DIR,
   VSCODE_COPILOT_WORKSPACE_STORAGE_DIR,
 } from '../config.js';
-import { scanAllProjects } from './scanner.js';
+import { scanAllProjects, upsertSessionFromFile } from './scanner.js';
 import { buildIndex, reindexSession } from './indexer.js';
-import { getDb } from '../db/connection.js';
 
 type ChangeListener = (type: string, sessionId?: string) => void;
+
+interface PendingFileSync {
+  timer: NodeJS.Timeout | null;
+  running: boolean;
+  queued: boolean;
+  lastEvent: string;
+}
+
 const listeners: ChangeListener[] = [];
+const fileSyncStates = new Map<string, PendingFileSync>();
+const FILE_SYNC_DEBOUNCE_MS = 3500;
+const BATCH_REFRESH_DEBOUNCE_MS = 1500;
+let batchRefreshTimer: NodeJS.Timeout | null = null;
+let heavyTaskQueue: Promise<void> = Promise.resolve();
 
 export function onFileChange(listener: ChangeListener): void {
   listeners.push(listener);
@@ -57,52 +69,107 @@ export function startWatcher(): void {
   console.log('[watcher] Watching for changes in', watchTargets.join(', '));
 }
 
-async function handleFileChange(filePath: string, event: string): Promise<void> {
+function handleFileChange(filePath: string, event: string): void {
   const basename = path.basename(filePath);
-
-  if (basename === 'sessions-index.json' || basename === 'session_index.jsonl' || basename === 'workspace.json') {
-    console.log(`[watcher] Index changed: ${filePath}`);
-    await scanAllProjects();
-    await buildIndex();
-    notifyListeners('scan-complete');
-    return;
-  }
-
+  const isIndexFile = basename === 'sessions-index.json'
+    || basename === 'session_index.jsonl'
+    || basename === 'workspace.json';
   const isCopilotJsonSession = basename.endsWith('.json') && filePath.includes(`${path.sep}chatSessions${path.sep}`);
   const isCursorStateDb = basename === 'state.vscdb' && filePath.includes(`${path.sep}workspaceStorage${path.sep}`);
   const isCursorGlobalStateDb = basename === 'state.vscdb' && filePath.includes(`${path.sep}globalStorage${path.sep}`);
 
-  if (basename.endsWith('.jsonl') || isCopilotJsonSession || isCursorStateDb || isCursorGlobalStateDb) {
-    console.log(`[watcher] Session ${event}: ${filePath}`);
-    const db = getDb();
+  if (isIndexFile || isCursorGlobalStateDb) {
+    scheduleBatchRefresh(filePath);
+    return;
+  }
 
-    await scanAllProjects();
+  if (basename.endsWith('.jsonl') || isCopilotJsonSession || isCursorStateDb) {
+    scheduleIncrementalSync(filePath, event);
+  }
+}
 
-    if (isCursorGlobalStateDb) {
+function scheduleBatchRefresh(filePath: string): void {
+  if (batchRefreshTimer) {
+    clearTimeout(batchRefreshTimer);
+  }
+
+  batchRefreshTimer = setTimeout(() => {
+    batchRefreshTimer = null;
+    enqueueHeavyTask(async () => {
+      console.log(`[watcher] Refreshing history after index change: ${filePath}`);
+      await scanAllProjects();
       await buildIndex();
       notifyListeners('scan-complete');
-      return;
-    }
+    });
+  }, BATCH_REFRESH_DEBOUNCE_MS);
+}
 
-    const session = db.prepare('SELECT id, indexed_at FROM sessions WHERE file_path = ?').get(filePath) as {
-      id: string;
-      indexed_at: string | null;
-    } | undefined;
+function scheduleIncrementalSync(filePath: string, event: string): void {
+  const state = fileSyncStates.get(filePath) || {
+    timer: null,
+    running: false,
+    queued: false,
+    lastEvent: event,
+  };
 
-    try {
-      const stat = fs.statSync(filePath);
-      if (session?.id) {
-        db.prepare('UPDATE sessions SET file_mtime = ?, modified_at = ? WHERE id = ?')
-          .run(stat.mtimeMs, new Date(stat.mtimeMs).toISOString(), session.id);
-      }
-    } catch (e) {
-      console.warn('[watcher] stat failed', filePath, ':', (e as Error).message);
-    }
+  state.lastEvent = event;
 
-    if (session?.indexed_at) {
-      await reindexSession(session.id, filePath);
-    }
-
-    notifyListeners('session-updated', session?.id);
+  if (state.timer) {
+    clearTimeout(state.timer);
   }
+
+  state.timer = setTimeout(() => {
+    state.timer = null;
+    void flushIncrementalSync(filePath);
+  }, FILE_SYNC_DEBOUNCE_MS);
+
+  fileSyncStates.set(filePath, state);
+}
+
+async function flushIncrementalSync(filePath: string): Promise<void> {
+  const state = fileSyncStates.get(filePath);
+  if (!state) return;
+
+  if (state.running) {
+    state.queued = true;
+    return;
+  }
+
+  state.running = true;
+  enqueueHeavyTask(async () => {
+    try {
+      do {
+        state.queued = false;
+        await processIncrementalSync(filePath, state.lastEvent);
+      } while (state.queued);
+    } finally {
+      state.running = false;
+      if (!state.timer && !state.queued) {
+        fileSyncStates.delete(filePath);
+      }
+    }
+  });
+}
+
+async function processIncrementalSync(filePath: string, event: string): Promise<void> {
+  console.log(`[watcher] Session ${event}: ${filePath}`);
+
+  const sessionId = await upsertSessionFromFile(filePath);
+  if (!sessionId) {
+    notifyListeners('session-updated');
+    return;
+  }
+
+  await reindexSession(sessionId, filePath);
+  notifyListeners('session-updated', sessionId);
+}
+
+function enqueueHeavyTask(task: () => Promise<void>): void {
+  heavyTaskQueue = heavyTaskQueue.then(async () => {
+    try {
+      await task();
+    } catch (error) {
+      console.error('[watcher] Background task failed:', error);
+    }
+  });
 }

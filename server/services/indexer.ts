@@ -1,8 +1,10 @@
 import { getDb } from '../db/connection.js';
-import { getSessionMetrics, parseSession } from './parser.js';
+import { parseSessionWithMetrics } from './parser.js';
 import { invalidateStatsCache } from './stats.js';
 
 let isIndexing = false;
+const INDEX_YIELD_INTERVAL = 10;
+let indexingQueue: Promise<void> = Promise.resolve();
 
 export function getIndexingStatus(): { isIndexing: boolean; indexed: number; total: number } {
   const db = getDb();
@@ -12,16 +14,12 @@ export function getIndexingStatus(): { isIndexing: boolean; indexed: number; tot
 }
 
 export async function buildIndex(): Promise<void> {
-  if (isIndexing) return;
-  isIndexing = true;
-
-  try {
+  return enqueueIndexTask(async () => {
     const db = getDb();
     const sessions = db.prepare(
       `SELECT id, file_path
        FROM sessions
-       WHERE indexed_at IS NULL
-          OR (id LIKE 'codex-%' AND total_input_tokens = 0 AND total_output_tokens = 0)`
+       WHERE indexed_at IS NULL`
     ).all() as { id: string; file_path: string }[];
 
     console.log(`[indexer] ${sessions.length} sessions to index`);
@@ -31,7 +29,7 @@ export async function buildIndex(): Promise<void> {
       VALUES (?, ?, ?, ?, ?)
     `);
 
-    for (const session of sessions) {
+    for (const [index, session] of sessions.entries()) {
       try {
         const metrics = await indexSession(session.id, session.file_path, insertFts);
         db.prepare(`UPDATE sessions
@@ -50,20 +48,29 @@ export async function buildIndex(): Promise<void> {
       } catch (e) {
         console.error(`[indexer] Failed to index ${session.id}:`, e);
       }
+
+      if ((index + 1) % INDEX_YIELD_INTERVAL === 0) {
+        await yieldToEventLoop();
+      }
     }
-  } finally {
-    isIndexing = false;
+
     invalidateStatsCache();
     console.log('[indexer] Indexing complete');
-  }
+  });
 }
 
 async function indexSession(
   sessionId: string,
   filePath: string,
   insertStmt: any
-): Promise<Awaited<ReturnType<typeof getSessionMetrics>>> {
-  const messages = await parseSession(filePath);
+): Promise<{
+  messageCount: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  toolCallCount: number;
+  model: string | null;
+}> {
+  const { messages, metrics } = await parseSessionWithMetrics(filePath);
   for (const message of messages) {
     const content = message.content
       .flatMap((block) => {
@@ -89,33 +96,54 @@ async function indexSession(
     }
   }
 
-  return getSessionMetrics(filePath, messages);
+  return metrics;
 }
 
 export async function reindexSession(sessionId: string, filePath: string): Promise<void> {
-  const db = getDb();
-  // Remove old FTS entries
-  db.prepare('DELETE FROM messages_fts WHERE session_id = ?').run(sessionId);
-  db.prepare('UPDATE sessions SET indexed_at = NULL WHERE id = ?').run(sessionId);
+  return enqueueIndexTask(async () => {
+    const db = getDb();
+    // Remove old FTS entries
+    db.prepare('DELETE FROM messages_fts WHERE session_id = ?').run(sessionId);
+    db.prepare('UPDATE sessions SET indexed_at = NULL WHERE id = ?').run(sessionId);
 
-  const insertFts = db.prepare(`
-    INSERT INTO messages_fts (session_id, message_uuid, role, content, timestamp)
-    VALUES (?, ?, ?, ?, ?)
-  `);
+    const insertFts = db.prepare(`
+      INSERT INTO messages_fts (session_id, message_uuid, role, content, timestamp)
+      VALUES (?, ?, ?, ?, ?)
+    `);
 
-  const metrics = await indexSession(sessionId, filePath, insertFts);
-  db.prepare(`UPDATE sessions
-    SET indexed_at = ?, message_count = ?, model = COALESCE(?, model),
-        total_input_tokens = ?, total_output_tokens = ?, tool_call_count = ?
-    WHERE id = ?`)
-    .run(
-      new Date().toISOString(),
-      metrics.messageCount,
-      metrics.model,
-      metrics.totalInputTokens,
-      metrics.totalOutputTokens,
-      metrics.toolCallCount,
-      sessionId,
-    );
-  invalidateStatsCache();
+    const metrics = await indexSession(sessionId, filePath, insertFts);
+    db.prepare(`UPDATE sessions
+      SET indexed_at = ?, message_count = ?, model = COALESCE(?, model),
+          total_input_tokens = ?, total_output_tokens = ?, tool_call_count = ?
+      WHERE id = ?`)
+      .run(
+        new Date().toISOString(),
+        metrics.messageCount,
+        metrics.model,
+        metrics.totalInputTokens,
+        metrics.totalOutputTokens,
+        metrics.toolCallCount,
+        sessionId,
+      );
+    invalidateStatsCache();
+  });
+}
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+function enqueueIndexTask<T>(task: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    indexingQueue = indexingQueue.then(async () => {
+      isIndexing = true;
+      try {
+        resolve(await task());
+      } catch (error) {
+        reject(error);
+      } finally {
+        isIndexing = false;
+      }
+    });
+  });
 }

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { getDb } from '../db/connection.js';
-import { getSessionMetrics, parseSession, parseSubagents } from '../services/parser.js';
+import { parseSessionWithMetrics, parseSubagents } from '../services/parser.js';
 import { exportSession } from '../services/exporter.js';
 import { invalidateStatsCache } from '../services/stats.js';
 
@@ -315,13 +315,11 @@ router.get('/:id/messages', async (req, res) => {
       session.summary = session.custom_title;
     }
 
-    const messages = await parseSession(session.file_path);
+    const { messages, metrics } = await parseSessionWithMetrics(session.file_path);
     const subagents = await parseSubagents(session.file_path);
 
     // Update message count and model if not set
     if (messages.length > 0) {
-      const metrics = await getSessionMetrics(session.file_path, messages);
-
       db.prepare(`UPDATE sessions SET message_count = ?, model = COALESCE(?, model),
         total_input_tokens = ?, total_output_tokens = ?, tool_call_count = ? WHERE id = ?`)
         .run(

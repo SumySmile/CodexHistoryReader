@@ -89,6 +89,10 @@ async function runStartupPhase(name: string, task: () => Promise<void> | void) {
   }
 }
 
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 function normalizeStoredText() {
   const db = getDb();
 
@@ -173,29 +177,37 @@ async function backfillMissingTitles() {
 }
 
 async function runBackgroundStartup() {
-  await runStartupPhase('Text normalization', () => {
-    normalizeStoredText();
-  });
-
-  await runStartupPhase('Title backfill', async () => {
-    await backfillMissingTitles();
-  });
-
-  await runStartupPhase('Project scan', async () => {
-    const count = await scanAllProjects();
-    console.log(`[startup] Scanned ${count} sessions`);
-  });
-
   await runStartupPhase('Watcher startup', () => {
     startWatcher();
     console.log('[startup] File watcher started');
   });
 
-  setTimeout(() => {
-    void runStartupPhase('Background indexing', async () => {
-      await buildIndex();
+  let queue = Promise.resolve();
+  const enqueue = (name: string, task: () => Promise<void> | void, delayMs = 0) => {
+    queue = queue.then(async () => {
+      if (delayMs > 0) {
+        await wait(delayMs);
+      }
+      await runStartupPhase(name, task);
+      await wait(0);
     });
+  };
+
+  enqueue('Text normalization', () => {
+    normalizeStoredText();
+  });
+  enqueue('Title backfill', async () => {
+    await backfillMissingTitles();
+  });
+  enqueue('Project scan', async () => {
+    const count = await scanAllProjects();
+    console.log(`[startup] Scanned ${count} sessions`);
+  });
+  enqueue('Background indexing', async () => {
+    await buildIndex();
   }, 1000);
+
+  await queue;
 }
 
 async function listen() {

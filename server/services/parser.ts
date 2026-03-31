@@ -22,23 +22,33 @@ export interface SessionMetrics {
 }
 
 export async function parseSession(filePath: string): Promise<ParsedMessage[]> {
+  const result = await parseSessionWithMetrics(filePath);
+  return result.messages;
+}
+
+export async function parseSessionWithMetrics(filePath: string): Promise<{
+  messages: ParsedMessage[];
+  metrics: SessionMetrics;
+}> {
   const virtualComposerPath = parseCursorComposerVirtualPath(filePath);
-  if (!virtualComposerPath && !fs.existsSync(filePath)) return [];
+  if (!virtualComposerPath && !fs.existsSync(filePath)) {
+    return finalizeParsedSession([]);
+  }
 
   if (virtualComposerPath) {
-    return parseCursorComposerSessionById(virtualComposerPath.composerId);
+    return finalizeParsedSession(parseCursorComposerSessionById(virtualComposerPath.composerId));
   }
 
   if (isCursorTranscriptPath(filePath)) {
-    return parseCursorTranscriptSession(filePath);
+    return finalizeParsedSession(await parseCursorTranscriptSession(filePath));
   }
 
   if (path.extname(filePath).toLowerCase() === '.vscdb') {
-    return parseCursorSession(filePath);
+    return finalizeParsedSession(await parseCursorSession(filePath));
   }
 
   if (path.extname(filePath).toLowerCase() === '.json') {
-    return parseCopilotSession(filePath);
+    return finalizeParsedSession(await parseCopilotSession(filePath));
   }
 
   const messages: ParsedMessage[] = [];
@@ -47,6 +57,9 @@ export async function parseSession(filePath: string): Promise<ParsedMessage[]> {
 
   const assistantChunks = new Map<string, ParsedMessage>();
   const toolUseNames = new Map<string, string>();
+  const codexMetrics = isCodexSessionFile(filePath)
+    ? { totalInputTokens: 0, totalOutputTokens: 0, model: null as string | null }
+    : null;
   let syntheticCounter = 0;
   const nextSyntheticId = (prefix: string) => `${prefix}-${++syntheticCounter}`;
 
@@ -55,6 +68,20 @@ export async function parseSession(filePath: string): Promise<ParsedMessage[]> {
     try {
       const obj = JSON.parse(line);
       const record = obj.type === 'response_item' && obj.payload ? obj.payload : obj;
+
+      if (codexMetrics) {
+        if (!codexMetrics.model && record?.type === 'message' && typeof record.model === 'string') {
+          codexMetrics.model = record.model;
+        }
+
+        if (obj.type === 'event_msg' && obj.payload?.type === 'token_count') {
+          const usage = obj.payload?.info?.total_token_usage;
+          if (usage && typeof usage === 'object') {
+            codexMetrics.totalInputTokens = Math.max(codexMetrics.totalInputTokens, Number(usage.input_tokens) || 0);
+            codexMetrics.totalOutputTokens = Math.max(codexMetrics.totalOutputTokens, Number(usage.output_tokens) || 0);
+          }
+        }
+      }
 
       if (
         ['file-history-snapshot', 'progress', 'summary'].includes(record.type)
@@ -140,23 +167,13 @@ export async function parseSession(filePath: string): Promise<ParsedMessage[]> {
     }
   }
 
-  return splitClaudeThinkingMessages(messages);
+  return finalizeParsedSession(splitClaudeThinkingMessages(messages), codexMetrics);
 }
 
 export async function getSessionMetrics(filePath: string, messages?: ParsedMessage[]): Promise<SessionMetrics> {
-  const resolvedMessages = messages || await parseSession(filePath);
-  const metrics = summarizeMessages(resolvedMessages);
-
-  if (isCodexSessionFile(filePath)) {
-    const codexMetrics = await extractCodexSessionMetrics(filePath);
-    metrics.totalInputTokens = codexMetrics.totalInputTokens;
-    metrics.totalOutputTokens = codexMetrics.totalOutputTokens;
-    if (!metrics.model && codexMetrics.model) {
-      metrics.model = codexMetrics.model;
-    }
-  }
-
-  return metrics;
+  if (messages) return summarizeMessages(messages);
+  const result = await parseSessionWithMetrics(filePath);
+  return result.metrics;
 }
 
 function summarizeMessages(messages: ParsedMessage[]): SessionMetrics {
@@ -172,46 +189,23 @@ function summarizeMessages(messages: ParsedMessage[]): SessionMetrics {
   };
 }
 
-function isCodexSessionFile(filePath: string): boolean {
-  return filePath.replace(/[\\/]+/g, '/').toLowerCase().includes('/.codex/sessions/');
-}
-
-async function extractCodexSessionMetrics(filePath: string): Promise<{
-  totalInputTokens: number;
-  totalOutputTokens: number;
-  model: string | null;
-}> {
-  let totalInputTokens = 0;
-  let totalOutputTokens = 0;
-  let model: string | null = null;
-
-  const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
-  const rl = readline.createInterface({ input: stream });
-
-  for await (const line of rl) {
-    if (!line.trim()) continue;
-
-    try {
-      const obj = JSON.parse(line);
-      const record = obj.type === 'response_item' && obj.payload ? obj.payload : obj;
-
-      if (!model && record?.type === 'message' && typeof record.model === 'string') {
-        model = record.model;
-      }
-
-      if (obj.type === 'event_msg' && obj.payload?.type === 'token_count') {
-        const usage = obj.payload?.info?.total_token_usage;
-        if (usage && typeof usage === 'object') {
-          totalInputTokens = Math.max(totalInputTokens, Number(usage.input_tokens) || 0);
-          totalOutputTokens = Math.max(totalOutputTokens, Number(usage.output_tokens) || 0);
-        }
-      }
-    } catch {
-      // ignore malformed lines
+function finalizeParsedSession(
+  messages: ParsedMessage[],
+  codexMetrics?: { totalInputTokens: number; totalOutputTokens: number; model: string | null } | null,
+): { messages: ParsedMessage[]; metrics: SessionMetrics } {
+  const metrics = summarizeMessages(messages);
+  if (codexMetrics) {
+    metrics.totalInputTokens = codexMetrics.totalInputTokens;
+    metrics.totalOutputTokens = codexMetrics.totalOutputTokens;
+    if (!metrics.model && codexMetrics.model) {
+      metrics.model = codexMetrics.model;
     }
   }
+  return { messages, metrics };
+}
 
-  return { totalInputTokens, totalOutputTokens, model };
+function isCodexSessionFile(filePath: string): boolean {
+  return filePath.replace(/[\\/]+/g, '/').toLowerCase().includes('/.codex/sessions/');
 }
 
 function parseCursorComposerSessionById(composerId: string): ParsedMessage[] {
