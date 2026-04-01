@@ -63,14 +63,16 @@ export function getStats(): StatsData {
 
   const modelUsage = db.prepare(`
     SELECT
+      ${SOURCE_SQL} as source,
       model,
-      COALESCE(SUM(total_input_tokens + total_output_tokens), 0) as count
+      COALESCE(SUM(total_input_tokens + total_output_tokens), 0) as count,
+      COUNT(*) as sessions
     FROM sessions
     ${visibleSessionWhere} AND model IS NOT NULL AND TRIM(model) <> ''
-    GROUP BY model
-    ORDER BY count DESC, model ASC
+    GROUP BY ${SOURCE_SQL}, model
+    ORDER BY count DESC, sessions DESC, source ASC, model ASC
     LIMIT 20
-  `).all() as { model: string; count: number }[];
+  `).all() as StatsData['modelUsage'];
 
   const sourceUsage = db.prepare(`
     SELECT

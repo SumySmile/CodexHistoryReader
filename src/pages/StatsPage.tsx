@@ -2,16 +2,34 @@ import { useState } from 'react';
 import { MessageSquare, FolderOpen, Wrench, Zap, ArrowDownUp, Activity } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  BarChart, Bar, PieChart, Pie, Cell
+  BarChart, Bar, PieChart, Pie, Cell,
 } from 'recharts';
 import { StatsSkeleton } from '../components/shared/Skeleton';
 import { SourceBadge } from '../components/shared/SourceBadge';
 import { useStats } from '../hooks/useStats';
-import { formatTokens } from '../lib/utils';
-
-const COLORS = ['#7ec8a0', '#c878a0', '#5a9ec8', '#d08050', '#48a8b8', '#e06060', '#9878b8', '#48a890'];
+import { formatTokens, formatModelName, sourceLabel, type SessionSource } from '../lib/utils';
 
 type Range = 7 | 30 | 90 | 'all';
+
+const SOURCE_ORDER: SessionSource[] = ['claude', 'codex', 'copilot'];
+
+const SOURCE_ACCENTS: Record<SessionSource, { solid: string; soft: string; palette: string[] }> = {
+  claude: {
+    solid: '#2d8a62',
+    soft: '#e8f6ef',
+    palette: ['#2d8a62', '#49a978', '#7ec8a0', '#9fd7b7', '#bfe3ce', '#d8efe2'],
+  },
+  codex: {
+    solid: '#b96d1f',
+    soft: '#fff3e8',
+    palette: ['#b96d1f', '#cf8543', '#e4a56d', '#f0bf93', '#f0cfaa', '#f8e2cb'],
+  },
+  copilot: {
+    solid: '#5a67d8',
+    soft: '#eef2ff',
+    palette: ['#5a67d8', '#7280ea', '#8f9aff', '#a9b3ff', '#cfd7ff', '#e3e8ff'],
+  },
+};
 
 export function StatsPage() {
   const { stats, loading, error } = useStats();
@@ -36,13 +54,23 @@ export function StatsPage() {
   const totalTokens = stats.totalInputTokens + stats.totalOutputTokens;
   const inputPct = totalTokens > 0 ? (stats.totalInputTokens / totalTokens) * 100 : 50;
   const outputPct = 100 - inputPct;
+  const sourceUsage = [...stats.sourceUsage].sort(
+    (a, b) => SOURCE_ORDER.indexOf(a.source) - SOURCE_ORDER.indexOf(b.source)
+  );
+  const modelUsage = stats.modelUsage.map((item, index) => ({
+    ...item,
+    displayModel: formatModelName(item.model, item.source),
+    label: `${sourceLabel(item.source)} / ${formatModelName(item.model, item.source)}`,
+    color: SOURCE_ACCENTS[item.source].palette[index % SOURCE_ACCENTS[item.source].palette.length],
+  }));
 
   return (
     <div className="h-full overflow-y-auto px-6 py-6">
       <h1 className="mb-6 text-2xl font-bold text-[#2d3d34]">Usage Statistics</h1>
 
-      <div className="mb-8 grid grid-cols-3 gap-4 xl:grid-cols-6">
+      <div className="mb-8 grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-7">
         <SummaryCard icon={<MessageSquare size={20} />} label="Total Sessions" value={stats.totalSessions.toLocaleString()} color="#7ec8a0" />
+        <SummaryCard icon={<Activity size={20} />} label="Total Messages" value={stats.totalMessages.toLocaleString()} color="#9b8cf2" />
         <SummaryCard icon={<ArrowDownUp size={20} />} label="Input Tokens" value={formatTokens(stats.totalInputTokens)} color="#5a9ec8" />
         <SummaryCard icon={<Activity size={20} />} label="Output Tokens" value={formatTokens(stats.totalOutputTokens)} color="#c878a0" />
         <SummaryCard icon={<Wrench size={20} />} label="Tool Calls" value={stats.totalToolCalls.toLocaleString()} color="#d08050" />
@@ -92,23 +120,31 @@ export function StatsPage() {
       )}
 
       <div className="mb-6 grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
-        {stats.sourceUsage.length > 0 && (
+        {sourceUsage.length > 0 && (
           <div className="rounded-lg border border-[#d0ddd5] bg-white p-4 shadow-sm">
             <h2 className="mb-4 text-lg font-medium text-[#2d3d34]">Sources</h2>
             <div className="space-y-3">
-              {stats.sourceUsage.map(source => {
+              {sourceUsage.map(source => {
                 const sessionPct = stats.totalSessions > 0 ? (source.sessions / stats.totalSessions) * 100 : 0;
+                const tokenPct = totalTokens > 0 ? (source.tokens / totalTokens) * 100 : 0;
+                const accent = SOURCE_ACCENTS[source.source];
                 return (
-                  <div key={source.source} className="rounded-xl bg-[#f7fbf8] px-3 py-3">
+                  <div key={source.source} className="rounded-xl px-3 py-3" style={{ backgroundColor: accent.soft }}>
                     <div className="mb-2 flex items-center justify-between gap-3">
                       <SourceBadge source={source.source} compact />
                       <div className="text-sm font-medium text-[#2d3d34]">{source.sessions.toLocaleString()} sessions</div>
                     </div>
                     <div className="mb-2 h-2 overflow-hidden rounded-full bg-[#e7f0eb]">
-                      <div className="h-full rounded-full bg-[#7ec8a0]" style={{ width: `${sessionPct}%` }} />
+                      <div className="h-full rounded-full" style={{ width: `${sessionPct}%`, backgroundColor: accent.solid }} />
                     </div>
                     <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#6b8578]">
-                      <span>{formatTokens(source.tokens)} tokens</span>
+                      <span>{sessionPct.toFixed(1)}% of sessions</span>
+                      <span>{tokenPct.toFixed(1)}% of tokens</span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#6b8578]">
+                      <span>{formatTokens(source.inputTokens)} in</span>
+                      <span>{formatTokens(source.outputTokens)} out</span>
+                      <span>{formatTokens(source.tokens)} total</span>
                       <span>{source.toolCalls.toLocaleString()} tool calls</span>
                     </div>
                   </div>
@@ -118,40 +154,51 @@ export function StatsPage() {
           </div>
         )}
 
-        {stats.modelUsage.length > 0 && (
+        {modelUsage.length > 0 && (
           <div className="rounded-lg border border-[#d0ddd5] bg-white p-4 shadow-sm">
-            <h2 className="mb-4 text-lg font-medium text-[#2d3d34]">Model Usage (by tokens)</h2>
+            <h2 className="mb-4 text-lg font-medium text-[#2d3d34]">Models (by tokens)</h2>
             <div className="flex items-center gap-4">
               <ResponsiveContainer width={180} height={200}>
                 <PieChart>
                   <Pie
-                    data={stats.modelUsage}
+                    data={modelUsage}
                     cx="50%"
                     cy="50%"
                     innerRadius={55}
                     outerRadius={85}
                     dataKey="count"
-                    nameKey="model"
+                    nameKey="label"
                   >
-                    {stats.modelUsage.map((_, i) => (
-                      <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                    {modelUsage.map((item, i) => (
+                      <Cell key={`${item.source}-${item.model}-${i}`} fill={item.color} />
                     ))}
                   </Pie>
                   <Tooltip
                     contentStyle={{ background: '#fff', border: '1px solid #d0ddd5', borderRadius: 8 }}
-                    formatter={(value: number | string | undefined) => formatTokens(Number(value) || 0)}
+                    formatter={(value: number | string | undefined, _name, item) => {
+                      const entry = item?.payload as typeof modelUsage[number] | undefined;
+                      return [
+                        `${formatTokens(Number(value) || 0)} tokens`,
+                        entry ? `${sourceLabel(entry.source)} / ${entry.displayModel}` : 'Tokens',
+                      ];
+                    }}
                   />
                 </PieChart>
               </ResponsiveContainer>
               <div className="min-w-0 flex-1 space-y-2">
-                {stats.modelUsage.slice(0, 6).map((m, i) => (
-                  <div key={i} className="flex min-w-0 items-center gap-2">
-                    <div className="h-3 w-3 flex-shrink-0 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
+                {modelUsage.slice(0, 6).map((model, i) => (
+                  <div key={`${model.source}-${model.model}-${i}`} className="flex min-w-0 items-start gap-2">
+                    <div className="mt-1 h-3 w-3 flex-shrink-0 rounded-full" style={{ backgroundColor: model.color }} />
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs text-[#2d3d34]">
-                        {m.model.replace('claude-', '').split('-').slice(0, 2).join('-')}
+                      <div className="mb-1 flex items-center gap-2">
+                        <SourceBadge source={model.source} compact />
                       </div>
-                      <div className="text-xs text-[#9aafa3]">{formatTokens(m.count)}</div>
+                      <div className="truncate text-xs font-medium text-[#2d3d34]">
+                        {model.displayModel}
+                      </div>
+                      <div className="text-xs text-[#9aafa3]">
+                        {formatTokens(model.count)} tokens / {model.sessions.toLocaleString()} sessions
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -206,7 +253,7 @@ export function StatsPage() {
               </div>
             </div>
             <div className="pt-1 text-xs text-[#9aafa3]">
-              Output/Input ratio: {stats.totalInputTokens > 0 ? (stats.totalOutputTokens / stats.totalInputTokens).toFixed(2) : '—'}x
+              Output/Input ratio: {stats.totalInputTokens > 0 ? (stats.totalOutputTokens / stats.totalInputTokens).toFixed(2) : 'N/A'}x
             </div>
           </div>
         </div>

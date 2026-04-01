@@ -34,14 +34,14 @@ function exportAsMarkdown(session: any, messages: ParsedMessage[]): string {
 
   for (const msg of messages) {
     if (msg.role === 'user') {
-      lines.push('## 用户');
+      lines.push('## User');
       lines.push('');
     } else if (msg.role === 'assistant') {
-      lines.push('## 助手');
+      lines.push('## Assistant');
       if (msg.model) lines.push(`*Model: ${msg.model}*`);
       lines.push('');
     } else {
-      lines.push('## 系统');
+      lines.push('## System');
       lines.push('');
     }
 
@@ -51,12 +51,12 @@ function exportAsMarkdown(session: any, messages: ParsedMessage[]): string {
       } else if (block.type === 'references') {
         lines.push(...formatReferencesBlock(block.items));
       } else if (block.type === 'thinking') {
-        lines.push('<details><summary>思考</summary>');
+        lines.push('<details><summary>Thinking</summary>');
         lines.push('');
         lines.push(block.thinking.slice(0, 10000));
         lines.push('</details>');
       } else if (block.type === 'tool_use') {
-        lines.push(`**工具：${block.name}**`);
+        lines.push(`**Tool: ${block.name}**`);
         lines.push('```json');
         lines.push(JSON.stringify(block.input, null, 2).slice(0, 5000));
         lines.push('```');
@@ -64,7 +64,7 @@ function exportAsMarkdown(session: any, messages: ParsedMessage[]): string {
         if (block.tool_name === 'AskUserQuestion') {
           lines.push(...formatAskUserQuestionResult(block));
         } else {
-          lines.push(`<details><summary>工具结果（${block.tool_name || block.tool_use_id}）</summary>`);
+          lines.push(`<details><summary>Tool result: ${block.tool_name || block.tool_use_id}</summary>`);
           lines.push('');
           lines.push('```');
           lines.push(block.content.slice(0, 5000));
@@ -84,7 +84,7 @@ function exportAsMarkdown(session: any, messages: ParsedMessage[]): string {
 
 function formatAskUserQuestionResult(block: ToolResultContent): string[] {
   const lines: string[] = [];
-  lines.push('**用户回答了 Claude 的问题**');
+  lines.push('**User answered assistant questions**');
   lines.push('');
 
   const structured = block.toolUseResult;
@@ -119,7 +119,7 @@ function formatReferencesBlock(items: { label?: string; path: string }[]): strin
   const lines: string[] = [];
   if (items.length === 0) return lines;
 
-  lines.push('**参考文件**');
+  lines.push('**References**');
   for (const item of items) {
     lines.push(`- ${item.label ? `${item.label}: ` : ''}\`${item.path}\``);
   }

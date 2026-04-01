@@ -3,7 +3,7 @@ import { ThinkingBlock } from './ThinkingBlock';
 import { ToolUseBlock } from './ToolUseBlock';
 import { MarkdownRenderer } from '../shared/MarkdownRenderer';
 import { User, Bot, MessageCircle, Check, Pencil } from 'lucide-react';
-import { formatDate } from '../../lib/utils';
+import { formatDate, formatModelName } from '../../lib/utils';
 import { useState } from 'react';
 
 // Tool names whose results should be shown as user answers
@@ -48,7 +48,7 @@ export function MessageBubble({ message }: Props) {
           </span>
           {message.model && (
             <span className="text-xs text-[#4da87a] font-medium">
-              {message.model.replace('claude-', '')}
+              {formatModelName(message.model)}
             </span>
           )}
           {message.timestamp && (
@@ -154,7 +154,7 @@ function UserAnswerBlock({ content, toolUseResult }: { content: string; toolUseR
       <div className="rounded-lg border border-[#d0c8a0] bg-[#fdfbf3] p-3">
         <div className="flex items-center gap-1.5 mb-3">
           <MessageCircle size={14} className="text-[#b07840]" />
-          <span className="text-xs font-medium text-[#b07840]">User answered Claude's questions</span>
+          <span className="text-xs font-medium text-[#b07840]">User answered assistant questions</span>
         </div>
         <div className="space-y-4">
           {items.map((item, index) => (

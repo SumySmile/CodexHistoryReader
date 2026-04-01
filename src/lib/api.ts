@@ -168,7 +168,12 @@ export interface StatsData {
   avgTokensPerSession: number;
   projectCount: number;
   dailyActivity: { date: string; sessions: number; messages: number }[];
-  modelUsage: { model: string; count: number }[];
+  modelUsage: {
+    source: 'claude' | 'codex' | 'copilot';
+    model: string;
+    count: number;
+    sessions: number;
+  }[];
   sourceUsage: {
     source: 'claude' | 'codex' | 'copilot';
     sessions: number;
